@@ -1,0 +1,2222 @@
+---
+title: "CO2 Emission by Vehicles"
+author: "Team Scienzo - Luka Marković, Vildan Čuturić"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Uvod
+
+Skup podataka CO2 Emission by Vehicles sadrži podatke o vozilima u Kanadi kao što su marka, model, vrsta karoserije, veličina motora, broj cilindara, tip menjača, tip goriva i potrošnja goriva u zavisnosti od vrste vožnje (gradska, autoput, kombinovana)
+
+Takođe, sadrži atribut pod nazivom CO2 Emissions koji zapravo predstavlja emisiju ugljen dioksida automobila, i taj atribut ćemo probati da pretpostavimo.
+
+Naš skup podataka sadrži 7685 opservacija i 12 atributa.
+
+Detaljnije informacije o podacima u nastavku.
+
+### Učitavanje podataka
+
+```{r libraries}
+library("knitr")
+library("tidyverse")
+library(ggplot2)
+```
+Biblioteku **knitr** koristimo zbog funkcije `kable()` koja nam uređuje data frame. 
+
+```{r data}
+co2_emission = read_csv("CO2 Emissions_Canada.csv")
+```
+
+### Tumačenje podataka
+
+```{r data_desc, echo=FALSE}
+colNames = colnames(co2_emission)
+colDesc = c(
+            "Marka automobila",
+            "Model automobila",
+            "Karoserija",
+            "Veličina Motora u litrima",
+            "Cilindar je komora u kojoj se sagoreva gorivo i proizvodi se snaga. Ova kolona je broj cilindara.",
+            "Prenos: <br> A - automatik, <br>AM - automatizovani manuelni(kao manuelni samo bez kvačila), <br>AS - automatik sa mogućnošću promene brzine, <br>AV - (CVT) Continuously varibale transmission - bezosećajno menjanje brzine, <br>M - manuelni, <br>3-10 brzina",
+            "Tip goriva: <br>X - benzin, <br>Z - premium benzin, <br>D - dizel, <br>E - etanol, <br>N - prirodni gas.",
+            "Potrošnja goriva u gradu (Litara na 100 kilometara).",
+            "Potrošnja goriva na otvorenom (Litara na 100 kilometara).",
+            "Potrošnja goriva kombinacija (Litara na 100 kilometara)  .",
+            "Potrošnja goriva kombinacija (Miles Per Galon).",
+            "Emisija ugljen-dioksida (u gramima po kilometru) za kombinovanu vožnju po gradu i na autoputevima."
+            )
+
+colNamesDesc_df = data.frame(
+  Naziv_atributa = colNames,
+  Opis = colDesc
+)
+
+kable(colNamesDesc_df)
+```
+
+## Obrada podataka
+
+```{r data_processing_libraries}
+library(corrplot)
+```
+
+Radi lakše obrade menjamo nazive kolona.
+
+```{r}
+custom_col_names <- c("Make", "Model", "VehicleClass", "EngineSize", "Cylinders", "Transmission", "FuelType", "FCCity", "FCHighway", "FCComb", "FCCombMPG", "CO2Emission")
+colnames(co2_emission) <- custom_col_names
+
+co2_emission <- co2_emission %>%
+  mutate(FuelType = recode(FuelType,
+                           D = "Diesel",
+                           E = "Ethanol",
+                           N = "Natural Gas",
+                           X = "Gasoline",
+                           Z = "PremiumGasoline"))
+```
+
+
+```{r data_processing}
+str(co2_emission)
+```
+Možemo zapaziti iz funkcije `str()` da su nam kolone Make, Model, Vehicle Class(karoserija), Transmission(Prenos) i Fuel Type(Tip goriva) kategorijske promenljive.
+
+## Cišćenje null vrednosti
+
+```{r}
+naCounts = co2_emission %>%
+  summarize(across(everything(), ~sum(is.na(.))))
+
+na_counts_long <- pivot_longer(naCounts, cols = everything(), names_to = "Column", values_to = "NA_Count")
+
+print(na_counts_long)
+```
+**Mozemo zaključiti da nemamo NULL vrednosti u dataset-u**
+
+## Provera kolone Make
+
+Možemo napraviti tabelu učestalosti kako bi proverili koliko ima određenih marki automobila
+
+```{r}
+co2_emission %>%
+  group_by(Make) %>%
+  summarize(Vehicles = n()) %>%
+  arrange(desc(Vehicles))
+```
+Nakon toga, radi vizuelizacija možemo to prikazati na bar plotu
+
+```{r}
+ggplot(co2_emission, aes(x = reorder(Make, Make, function(x) -length(x)))) +
+  geom_bar() +
+  labs(title = "Raspodela podataka kolone Make", x = "Marka", y = "Broj vozila") +
+  theme(axis.text.x = element_text(angle = 60, hjust = 1))
+```
+
+Možemo primetiti da u broju dominiraju Američke marke automobila, pošto je skup podataka prikupljen u Kanadi ovo nije čudno. Sa druge strane spektra dominiraju luksuznije marke automobila, što je očekivano (što je auto skuplji to će ih biti manje) i pored toga marka Smart se nalazi u malom broju (veoma je moguće da ovakav automobil nema praktičnu primenu u gradovima u Kanadi koji su orjentisani prema automobilima tj. koji su planski gradjeni i gde nije problem naći parking mesto, a pored toga na tržištu u kojem dominiraju modeli većih dimenzija se smatra da ovako mali auto nije bezbedan). Ove pretpostavke na osnovu domenskog znanja možemo potkrepiti ili opovrgnuti u daljoj analizi podataka tako što ćemo proveriti broj SUV modela i generalno automobila većih dimenzija naspram broja manjih i ekonomičnijih modela. **Ovo uzimamo u razmatranje zato što bi ovakav trend mogao loše da utiče na primenljivost bilo kakve pretpostavke na osnovu ovog dataseta za tržišta koja se nalaze van severne Amerike.** Ako podaci u datasetu naginju ka većem broju automobila koji su generalno veći (veća težina - veće kubikaže - više zagađenja), zaključci izvedeni na osnovu njega ne moraju nužno da budu primenljivi za neko šire shvatanje zagađenja na nekoj drugoj lokaciji kao što je npr. Evropsko tržište, a model će verovatno lošije predvidjati za takve skupove podataka.
+
+```{r}
+vehicleClassGroup <- data.frame(
+  Make = co2_emission$Make,
+  VehicleClass = co2_emission$VehicleClass
+)
+
+classify_vehicle <- function(vehicle_class) {
+  bigger_classes <- c("SUV - SMALL", "MID-SIZE", "FULL-SIZE", "SUV - STANDARD", "VAN - CARGO", "PICKUP TRUCK - STANDARD", "MINIVAN", "SPECIAL PURPOSE VEHICLE", "STATION WAGON - MID-SIZE")
+
+  if (vehicle_class %in% bigger_classes) {
+    return("Veći automobil")
+  } else {
+    return("Manji automobil")
+  }
+}
+
+vehicleClassGroup$VehicleGroup <- sapply(vehicleClassGroup$VehicleClass, classify_vehicle)
+
+ggplot(vehicleClassGroup, aes(x = VehicleGroup)) +
+  geom_bar(color = "black") +
+  xlab("Grupa automobila") +
+  ylab("Broj vozila") +
+  ggtitle("Broj automobila većih dimenzija naspram automobila sa manjim dimenzijama") +
+  theme_minimal()
+
+```
+
+Na grafu možemo primetiti da broj automobila sa većim karoserijama dominira u ovom dataset-u, što može da potkrepi naš zaključak koji smo naveli iznad, ali takođe ta razlika od otprilike 1000 automobila u datasetu od 7000 ne bi trebala da utiče toliko puno na rezultat našeg predviđanja.
+
+Sada bi mogli da proverimo koliko koja marka ima kakvih automobila, uzimajući u obzir i karoseriju automobila.
+
+```{r out.width="100%"}
+library(viridis)
+
+
+vehicleClassOrdered = c(
+  "TWO-SEATER",
+  "MINICOMPACT", 
+  "SUBCOMPACT", 
+  "COMPACT", 
+  "MID-SIZE", 
+  "FULL-SIZE",
+  "STATION WAGON - SMALL",
+  "STATION WAGON - MID-SIZE",
+  "SUV - SMALL", 
+  "SUV - STANDARD",
+  "PICKUP TRUCK - SMALL",
+  "PICKUP TRUCK - STANDARD",
+  "VAN - CARGO",
+  "VAN - PASSENGER",
+  "MINIVAN",
+  "SPECIAL PURPOSE VEHICLE"
+)
+
+ggplot(vehicleClassGroup, aes(x = reorder(Make, Make, function(x) -length(x)))) +
+  geom_bar(aes(fill = factor(VehicleClass, levels = vehicleClassOrdered ))) +
+  scale_fill_viridis_d(option = "turbo")+
+  labs(title = "Marka i broj vozila po tipu karoserije", x = "Marka", y = "Broj vozila") +
+  theme(axis.text.x = element_text(angle = 70, hjust = 1))+
+  guides(fill = guide_legend(
+    title = "Tip karoserije",
+    title.position = "top",
+    label.theme = element_text(size = 6)
+  ))
+  
+  
+```
+
+Ovde možemo primetiti detaljnije da su marke iz SAD (Ford, GMC, Buick, RAM, ...) okarakterisane vozilima većih karoserija (boje u opsegu crvene su vezane za veće karoserije) dok su evropske marke (Mini, Volkswagen, Porsche, ...) okarakterisane vozilima manjih karoserija (boje u opsegu plave označavaju manje karoserije). Na ovakvoj raspodeli, za azijske marke (Honda, KIA, Nissan,...) važi da spadaju negde između ove dve krajnosti, tj. da su u datasetu zastupljene sa vozilima koja imaju "srednju" veličinu karoserije, ali ipak ovakvo stanje situacije ide u korist pretpostavci navedenoj iznad.
+
+Jedina kategorija karoserije koju je teško kategorizovati u ovom slučaju su dvosedi (two-seater) tj. vozila koja su fokusirana na brzu, sportsku vožnju. Problem u ovoj vrsti kategorije leži u tome što su te karoserije relativno male, ali motori koji se koriste u njima su jači i većih zapremina.
+
+Za veću preglednost, možemo iskoristiti već napravljenu podelu na manje i veće karoserije i ubaciti to na grafik.
+
+```{r out.width="100%"}
+
+  ggplot(vehicleClassGroup, aes(x = reorder(Make, Make, function(x) -length(x)))) +
+  geom_bar(aes(fill = VehicleGroup)) +
+  labs(title = "Marka i vozila po veličini", x = "Marka", y = "Broj vozila", fill = "Grupa automobila") +
+  theme(axis.text.x = element_text(angle = 60, hjust = 1))
+
+```
+
+Ovde već možemo malo lakše primetiti trendove koje smo naveli za gornji grafik, i ako gubimo malo na preciznosti ovakvom generalizacijom.
+
+Možemo da izvučemo prosek emisije CO2 prema marki vozila, kakva je povezanost ove dve kolone?
+
+```{r}
+emByMake <- co2_emission %>%
+  group_by(Make) %>%
+  summarize(AvgCO2 = mean(CO2Emission))
+
+emByMake_df <- as.data.frame(emByMake)
+
+colnames(emByMake_df) <- c("Make", "Average CO2 Emission(g/km)")
+
+print(head(emByMake_df, 15), right=F)
+
+```
+
+```{r out.width="100%"}
+
+emByMake$Make <- factor(emByMake$Make, levels = emByMake$Make[order(emByMake$AvgCO2)])
+
+ggplot(emByMake, aes(x = Make, y = AvgCO2)) +
+  geom_bar(stat = "identity", position = "dodge") +
+  xlab("Marka") +
+  ylab("Emisija CO2 (g/km)") +
+  ggtitle("Prosečna emisija ugljen-dioksida po marki vozila") +
+  theme_minimal() +
+  coord_flip()
+
+```
+
+
+Na vrhu po zagađenju možemo naći skupocene marke, sa jedne strane to nije čudno jer se u njima u najvećem slučaju nalaze motori većih zapremina, ali sa druge strane ne mora da znači da je ovo reprezentativno ponašanje pošto tih marki nemamo puno u datasetu. Zanimljivost koju ovde možemo primetiti koja ide u korist onome što smo naveli gore je da su najmanji zagađivači ili evropske ili japanske marke automobila (prvi najmanji zagađivač iz SAD je marka Buick), što ide u korist onome što smo naveli gore.
+
+## Provera kolone Model
+
+```{r}
+n_distinct(co2_emission$Model)
+```
+Pošto ovde imamo 2048 različitih modela automobila, bilo bi nepraktično da pokušavamo da dođemo do nekog zaključka na na isti način kojim smo to uradili za marke, ali i pored toga na osnovu domenskog znanja možemo da znamo da emisije CO2 se mogu razlikovati i kod istog modela u zavisnosti od toga koji je motor korišcen, pošto uvek postoji vise opcija. Na osnovu toga, možemo kasnije ukombinovati ovu kategorijsku promenljivu u neko predviđanje sa kolonom koja označava broj cilindara i transmisijom kako bi možda dobili bolje predviđanje na osnovu snage motora, što je u ovom slučaju glavno.
+
+Ne vidimo način da ukrupnimo nekako ove podatke zarad vizuelizacije, a da se to ne svede na pregledanje ovih vozila po proizvođaču.
+
+
+## Provera kolone Vehicle Class
+
+Za početak, možemo proveriti koliko jedinstvenih vrednosti imamo u navedenoj koloni.
+
+```{r}
+n_distinct(co2_emission$VehicleClass)
+```
+Koje su to vrednosti i koliko ih ima.
+
+```{r}
+co2_emission$VehicleClass = factor(co2_emission$VehicleClass)
+
+vehicleClassCounts <- co2_emission %>%
+  count(VehicleClass, name = "Vehicles") %>%
+  arrange(desc(Vehicles))
+
+vehicleClassCounts
+```
+
+Distribucija podataka.
+
+```{r}
+ggplot(co2_emission, aes(x = reorder(VehicleClass, VehicleClass, function(x) -length(x)))) +
+  geom_bar() +
+  labs(title = "Raspodela podataka po koloni VehicleClass", x = "Karoserija", y = "Broj vozila") +
+  theme(axis.text.x = element_text(angle = 60, hjust = 1))
+```
+
+Možemo da uradimo isto kao i za marke vozila, da proverimo prosečnu emisiju za karoseriju. Ovde već imamo malo *pravednije merenje*, jer u primeru marki smo imali npr. marku BUGGATI koja proizvodi samo brze sportske automobile sa jakim motorima, a naravno jači motor pravi više zagađenja.
+
+```{r}
+emByVehicleClass = co2_emission %>%
+  group_by(VehicleClass) %>%
+  summarize(AvgCO2 = mean(CO2Emission)) %>%
+  arrange(desc(AvgCO2))
+
+emByVehicleClass_df <- as.data.frame(emByVehicleClass)
+
+colnames(emByVehicleClass_df) <- c("Vehicle Class", "Average CO2 Emission(g/km)")
+
+print(head(emByVehicleClass_df, 15), right=F)
+
+```
+
+Možemo uočiti da malo veću emisiju prave VAN vozila tačnije putnički kombiji, što je i logično. Možemo to prikazati i grafom.
+
+```{r out.width="100%"}
+
+emByVehicleClass$VehicleClass <- factor(emByVehicleClass$VehicleClass,levels=emByVehicleClass$VehicleClass[order(emByVehicleClass$AvgCO2)])
+
+emByVehicleClass <- left_join(emByVehicleClass, vehicleClassCounts, by = "VehicleClass")
+
+ggplot(emByVehicleClass, aes(x = VehicleClass, y = AvgCO2, label = Vehicles)) +
+  geom_bar(stat = "identity") +
+  geom_text(aes(color = "Broj vozila"), vjust = -0.5, size = 3) +
+  xlab(" ") +
+  ylab("Emisija ugljen-dioksida (g/km)") +
+  ggtitle("Prosečna emisija ugljen-dioksida po karoseriji vozila") +
+  theme(axis.text.x = element_text(angle = 50, hjust = 1)) +
+  scale_color_manual(values = "blue", guide = guide_legend())+
+  guides(color = guide_legend(override.aes = list(label = "123"), title = "Legenda:"))
+```
+Na osnovu ovog grafa dolazimo do veoma čudnih zaključaka, npr. da u proseku subcompact koji je manji tip karoserije ima veće emisije ugljen dioksida nego compact, mid-size i ostale veće klase automobila.
+
+Kako bi dalje razmatrali ovaj problem možemo se vratiti na primer tipa karoserije "Two-seater", tj. vozila koja imaju male karoserije, ali motore većih zapremina. Na osnovu tog primera, možemo doći do zaključka da tip karoserije nije nužan pokazazatelj toga koliko će vozilo zagađivati, ne možemo npr. napraviti pretpostavku da automobili manjih karoserija zagađuju manje, jer se to očigledno kosi sa primerom navedenim gore, tj. vidimo da je bitniji pokazatelj zagađenja zapravo motor vozila, a ne tip karoserije sam po sebi.
+
+Generalno, ovde je loše urađena raspodela na klase automobila u samom datasetu, nisu dati detalji na osnovu čega su automobili podeljeni na ove klase. Na osnovu Wikipedije (https://en.wikipedia.org/wiki/Vehicle_size_class), u Kanadi se automobili dele na 5 klasa, a ovde ih imamo 16, i pored toga se dele na osnovu unutrašnje zapremine vozila (ne motora) ili težine samog vozila, a ovde ne posedujemo ni jednu od te dve varijable.
+
+U ovom datasetu nije navedeno na osnovu čega su automobili podeljeni u ove klase i to može napraviti problem za izvlačenje zaključaka iz ove kolone, a ne možemo ispraviti tu grešku jer nisu date zapremine automobila (unutrašnja zapremina vozila u litrima ili kubnim stopama), njihova težina ili bilo šta sto nam može pomoći da pravilno klasifikujemo ova vozila prema veličini već se moramo uzdati u postojeću raspodelu.
+
+Na osnovu svega toga za sad ćemo zanemariti ovu kolonu i pokušati da izvučemo bolje zaključke na osnovu kubikaže motora automobila koja bi trebalo da nam da bolje informacije o tome kakve bi emisije CO2 mogli da očekujemo, ali možemo je svakako uključiti u kreiranje modela u kasnijem roku.
+
+
+## Provera kolone Engine Size
+
+
+Za početak možemo videti koliko imamo različitih veličina motora.
+
+
+```{r}
+n_distinct(co2_emission$EngineSize)
+```
+
+Koji su to veličine i koliko ih je.
+
+```{r}
+co2_emission$EngineSize = factor(co2_emission$EngineSize)
+
+co2_emission %>%
+  count(EngineSize, name = "Vehicles") %>%
+  arrange(desc(Vehicles))
+```
+```{r}
+enSizePlot <- ggplot(co2_emission, aes(x = reorder(EngineSize, EngineSize, function(x) -length(x)))) +
+  geom_bar() +
+  labs(title = "Raspodela podataka kolone Engine size", x = "Veličina motora", y = "Broj automobila") +
+  theme(axis.text.x = element_text(angle = 60, hjust = 1))
+
+enSizePlot
+```
+
+Pošto se najveći broj kubikaža nalazi na prvoj polovini plota ako ga gledamo po x osi, možemo uzumirati plot kako bi ga bolje pogledali
+
+```{r}
+enSizePlot + coord_cartesian(xlim = c(1, 20.0))
+```
+
+
+Možemo sa sigurnošću zaključiti da se u Kanadi najviše voze vozila sa 2.0 motorima. Generalno, na prvi pogled, preovlađuju vozila sa većim kubikažama što ide u korist hipotezi da u ovom datasetu ima više većih zagađivača nego manjih, tj. da dominiraju vozila sa motorima većih zapremina.
+
+Dalje, kako bi dobili bolju sliku o tome kako su ovi motori raspodeljeni i koliko ima velikih, srednjih i malih motora, možemo podeliti sve ove kubikaže u te tri klase (npr. razlika izmedju 3.5 i 3.6 je minimalna, obe ove kubikaže bi bile u jednoj klasi) na sledeći način:
+
+Mali motori - sve kubikaže do 2.0L
+
+Srednji motori - od 2.0L do 4.0L
+
+Veliki motori - od 4.0L i više
+
+
+```{r}
+
+cut = c(0, 2, 4, Inf)
+co2_emission$EngineSize <- as.numeric(as.character(co2_emission$EngineSize))
+
+engineClasses = cut(co2_emission$EngineSize, cut, labels = c("Mala", "Srednja", "Velika"))
+
+engineClasses = data.frame(EngineClass = engineClasses)
+ 
+engineClasses %>%
+  count(EngineClass, name = "Vehicles") %>%
+  arrange(desc(Vehicles))
+
+```
+
+```{r}
+ggplot(engineClasses, aes(x = EngineClass)) +
+  geom_bar() +
+  labs(title = "Raspodela podataka kolone Engine size", x = "Veličina motora", y = "Broj automobila") +
+  theme(axis.text.x = element_text(angle = 60, hjust = 1))
+
+```
+
+Na ovom grafiku možemo veoma dobro primetiti da dominiraju motori srednjih zapremina, ali to uključuje sve kubikaže do 4L koja je i dalje sama po sebi poprilično velika, a i pored toga imamo još skoro 1500 motora kubikaža većih od 4L što nas dovodi do zaključka da u ovom datasetu imamo poprilično veći broj automobila koji bi mogli da se smatraju većim zagađivačima.
+
+
+Dalje možemo kao i kod prethodnih primera proveriti prosečnu emisiju CO2 po veličini motora.
+
+```{r}
+emByEngineSize = co2_emission %>%
+  group_by(EngineSize) %>%
+  summarize(AvgCO2 = mean(CO2Emission)) %>%
+  arrange(desc(AvgCO2))
+
+emByEngineSize_df <- as.data.frame(emByEngineSize)
+
+colnames(emByEngineSize_df) <- c("Engine Size", "Average CO2 Emission(g/km)")
+
+print(head(emByEngineSize_df, 15), right=F)
+
+```
+
+
+```{r out.width="100%"}
+
+
+data <- data.frame(
+  EngineSize = as.character(emByEngineSize$EngineSize),
+  CO2Emission = emByEngineSize$AvgCO2
+)
+
+ggplot(data, aes(x = EngineSize, y = CO2Emission, fill = EngineSize)) +
+  geom_bar(stat = "identity", position = "dodge") +
+  scale_fill_viridis(discrete = TRUE, option = "cividis") +
+  xlab("Engine Size") +
+  ylab("CO2 Emission (g/km)") +
+  ggtitle("Comparison of CO2 Emissions by Engine Size") +
+  theme_minimal() +
+  theme(axis.text.x = element_blank())
+
+```
+
+Na osnovu plota možemo potvrditi ono što smo već znali, a to je da motori većih kubikaža više i zagađuju ali ono što takođe možemo primetiti je da taj trend ne važi uvek, imamo slučajeve gde veći motori zagađuju manje što može napraviti probelm pri korišćenju ove kolone u modelu jer će nam biti potrebna sigurno još neka koja mora da objasni ovaj fenomen kako bi dolazili do ispravnih zaključaka.
+
+
+## Provera kolone Cylinders
+
+Možemo proveriti koliko automobila ima koliko cilindara i ujedno prikazati i distribuciju podataka ove kolone.
+
+```{r}
+cylindersCount <- co2_emission %>%
+  count(Cylinders, name = "Vehicles") %>%
+  arrange(desc(Vehicles))
+
+cylindersCount
+```
+
+
+```{r}
+cylindersPlot <- ggplot(co2_emission, aes(x = reorder(Cylinders, Cylinders, function(x) -length(x)))) +
+  geom_bar() +
+  labs(title = "Raspodela podataka kolone Cylinders", x = "Broj cilindara", y = "Broj automobila") +
+  theme(axis.text.x = element_text(angle = 60, hjust = 1))
+
+cylindersPlot
+```
+
+Možemo primetiti da dominiraju motori sa 4 cilindra koji bi u velikom broju slučajeva trebali da budu manji zagađivači ako ne posmatramo kubikažu motora, a ako gledamo zajedno motore sa 6 i 8 cilindara, ima ih u malo većem broju. Naspram toga imamo poprilično mali broj motora sa velikim brojem cilindara (10,12,16) i onih motora sa neparnim brojem cilindara koji su generalno retki u automobilizmu.
+
+Sada možemo da proverimo prosečnu emisiju CO2 po broju cilindara.
+
+```{r}
+emByCylinders = co2_emission %>%
+  group_by(Cylinders) %>%
+  summarize(AvgCO2 = mean(CO2Emission)) %>%
+  arrange(desc(AvgCO2))
+
+emByCylinders_df <- as.data.frame(emByCylinders)
+
+colnames(emByCylinders_df) <- c("Cylinders", "Average CO2 Emission(g/km)")
+
+print(head(emByCylinders_df, 10), right=F)
+
+```
+
+Odmah možemo zaključiti da što veći broj cilindara na motoru automobila rezultira u većoj emisiji CO2.
+Možemo da to i prikažemo grafički.
+
+```{r}
+data <- data.frame(
+  Cylinders = emByCylinders$Cylinders,
+  CO2Emission = emByCylinders$AvgCO2
+)
+
+data <- left_join(data, cylindersCount, by = "Cylinders")
+
+data$Cylinders <- factor(as.character(emByCylinders$Cylinders), levels = as.character(emByCylinders$Cylinders)[order(emByCylinders$Cylinders)])
+
+
+p <- ggplot(data, aes(x = Cylinders, y = CO2Emission, label = Vehicles)) +
+  geom_bar(stat = "identity", position = "dodge") +
+  geom_text(aes(color = "Broj vozila"), vjust = -0.5, size = 3) +
+  xlab("Broj cilindara") +
+  ylab("Emisija ugljen-dioksida (g/km)") +
+  ggtitle("Prosečna emisija ugljen-dioksida po cilindrima automobila") +
+  theme(axis.text.x = element_text(angle = 50, hjust = 1)) +
+  scale_color_manual(values = "blue", guide = guide_legend())+
+  guides(color = guide_legend(override.aes = list(label = "123"), title = "Legenda:"))
+
+print(p)
+```
+
+## Provera kolone Transmission
+
+```{r}
+library(tidyr)
+```
+
+Biblioteku **tidyr** koristimo kako bi razdvojili određenje podatke, u našem slučaju npr. M6 bi označavao manuleni menjač sa 6 brzina, preglednije je da razdvojimo ovaj podatak i biće nam korisno za izradu grafa.
+Možemo proveriti kakve to sve prenose vozila imamo u Kanadi, koliko brzina i koliko vozila koristi koji prenos sa koliko brzina.
+
+```{r}
+transmission_vehicles <- co2_emission %>%
+  count(Transmission, name = "Vehicles", sort = TRUE)
+
+transmission_vehicles
+```
+
+```{r}
+transmissionPlot <- ggplot(co2_emission, aes(x = reorder(Transmission, Transmission, function(x) -length(x)))) +
+  geom_bar() +
+  labs(title = "Raspodela podataka kolone Transmission", x = "Prenos", y = "Broj automobila") +
+  theme(axis.text.x = element_text(angle = 60, hjust = 1))
+
+transmissionPlot
+```
+
+Možemo primetiti da po ovom datasetu u Kanadi se najviše voze vozila sa AS6 prenosom tačnije, automatik sa mogućnošću ručne promene brzine i 6 brzina. Generalno, ako se oslanjamo na domensko znanje, mogli smo da pretpostavimo da će automatici dominirati u ovom datasetu pošto su oni generalno popularni u severnoj Americi.
+
+Za razmatranje ove kolone možemo se osloniti na domensko znanje o tipovima menjača, tj. testirati sledeću pretpostavku:
+
+Stariji automatski menjači nisi imali mogućnosti pravovremenog i odgovarajućeg odabira brzine u pojedinim slučajevima, npr. ostavljali bi automobil u neodgovarajućem stepenu prenosa za uslove vožnje što bi rezultiralo u većoj potrošnji goriva i većem zagađenju.
+
+Suprotno od toga, u idelanom slučaju, vozač automobila sa manuelnim menjačem je mogao sam prilagoditi stepen prenosa kako bi motor radio na što manjim obrtajima i manje trošio.
+
+Na osnovu toga, postoji i mit o tome da su automatici veći potrošači goriva od manuelnih menjača (pod uslovom da je vozač obazriv). Ali ipak, korišćenjem modernih tehnologija i proizvodnjom automatskih menjača koji su mnogo precizniji i brži pri menjanju brzina od čoveka trebalo bi da je ovaj problem otklonjen, i to ćemo proveriti.
+
+
+```{r}
+
+tranType <- co2_emission %>%
+  mutate(Transmission = case_when(
+    grepl("A", Transmission) ~ "Automatic",
+    grepl("M", Transmission) ~ "Manual",
+    TRUE ~ "Other"
+)) %>%
+  group_by(Transmission) %>%
+  summarize(AvgCO2 = mean(CO2Emission, na.rm = TRUE))
+
+
+tranType$Transmission = as.factor(tranType$Transmission)
+
+ggplot(tranType, aes(x = Transmission, y = AvgCO2)) +
+  geom_bar(stat = "identity", position = "dodge") +
+  xlab("Tip prenosa") +
+  ylab("Emisija ugljen-dioksida (g/km)") +
+  ggtitle("Prosečna emisija ugljen-dioksida po vrsti menjača automobila")
+  
+
+```
+
+Izgleda da mit i dalje važi, tj. da ovo nije mit, automatici imaju veću emisiju izduvnih gasova od manuelnih menjača, ali takođe ta promenjliva će u stvarnom životu zavisiti dosta od stila vožnje samog vozača ( neko ko se trudi da konstantno vozi u što većem stepenu prenosa na što manjim obrtajima će trošiti manje goriva od nekog ko vozi veoma agresivno i menja brzine tek kada motor dostigne veći broj obrtaja) i same sredine u kojoj se vrši vožnja ( na autoputu gde se konstantno vozi u visokom stepenu prenosa potrošnja će biti generalno manja nego u gradskoj vožnji gde se stepen prenosa često menja).
+
+
+Možemo se za sad vratiti nazad na sitnije podele po tipu prenosa i proveriti kako su one povezane sa emisijom CO2.
+
+```{r}
+emByGears = co2_emission %>%
+  group_by(Transmission)
+
+emByGears$Transmission = as.numeric(gsub("[^0-9]", "", emByGears$Transmission))
+
+emByGears <- emByGears %>%
+  summarise(AvgCO2 = mean(CO2Emission))%>%
+  arrange(desc(AvgCO2))
+
+emByGears_df <- as.data.frame(emByGears)
+
+colnames(emByGears_df) <- c("Transmission", "Average CO2 Emission(g/km)")
+
+print(head(emByGears_df, 10), right=F)
+
+```
+
+Kako bi lakše dolazili do zaključaka ovo možemo postaviti na plot
+
+```{r}
+
+emByGears$Transmission <- replace(emByGears$Transmission, is.na(emByGears$Transmission), "CVT")
+
+emByGears$Transmission = as.factor(emByGears$Transmission)
+
+ggplot(emByGears, aes(x = Transmission, y = AvgCO2)) +
+  geom_bar(stat = "identity", position = "dodge") +
+  xlab("Broj brzina") +
+  ylab("Emisija ugljen-dioksida (g/km)") +
+  ggtitle("Prosečna emisija ugljen-dioksida po broju brzina automobila")
+```
+
+Ovde je već malo teže doći do konkretnih zaključaka na osnovu broja brzina, na osnovu plota se vidi nešto sto je na prvi pogled čudno, vozila sa malim brojem brzina zagađuju dosta (4 brzine) a pored toga i vozila sa velikim brojem brzina takođe dosta zagađuju. 
+
+Sada možemo koristiti domensko znanje kako bi objasnili ovaj fenomen:
+
+Znajući da veći broj brzina omogućava bolju kontrolu broja obrtaja u različitim uslovima vožnje bi smo mogli da dođemo do zaključka da su vozila sa većim brojem brzina manji zagađivači, što očigledno nije tačno jer su vozila sa 10 brzina približno slična po zagađenju kao vozila sa 4 brzine. Ali u ovom razmatranju izostavljamo jednu činjenicu, a to je da su vozila koja imaju ovoliko veliki broj brzina u najvećem broju slučajeva šleperi sa velikim motorima koji će naravno biti veći zagađivači ili automatski menjači za koje smo već videli da zagađuju više.
+
+Sada kada to znamo možemo ove podatke dovesti u kontekst:
+
+-Najveći zagađivači su menjači sa 4 brzine - mali broj brzina sprečava prilagođavanje različitim uslovima vožnje, tj. forsira vozača da vozi na većim obrtajima (vozimo prebrzo za manji stepen prenosa ali ne možemo da se prebacimo u veći zbog uslova u saobraćaju i nemogućnosti da ubrzamo nakon promene stepena prenosa, samim tim trošimo i zagađujemo više - ovo je ostavljeno ovde i ako u našem datasetu ova činjenica ne važi jer nemamo manuelne menjače sa 4 brzine, kao što ćemo videti u daljem pregledu podataka) 
+
+-Zagađenje opada kada imamo 5 brzina, veći broj brzina i duži prenosni odnosi dozvoljavaju bolje prilagođavanje uslovima na putu.
+
+-U slučaju 6 brzina zagađenje ponovo raste, ali to je zato što taj broj brzina u velikom broju slučajevima imaju jači i veći motori
+
+-7 i 8 brzina, ponovo imamo rast zagađenja
+
+-9 brzina, ponovo imamo pad (zašto?)
+
+-10 brzina, ponovo rast (automatici i kamioni)
+
+-CVT - continously variable transsmission - omogućavaju veoma efikasnu raspodelu snage motora u zavisnosti od uslova i samim tim rezultiraju u manjoj potrošnji tj. manjem zagađenju u našem slučaju
+
+
+Sada ove dve vrednosti za menjače možemo pogledati zajedno, kako broj brzina i tip transmisije utiču na potrošnju, tj. zagađenje?
+
+```{r out.width="100%"}
+emByTransmission = co2_emission %>%
+  group_by(Transmission) %>%
+  summarize(AvgCO2 = mean(CO2Emission))
+
+emByTransmission <- separate(emByTransmission, col = Transmission, into = c("Type", "Gears"), sep = "(?<=\\D)(?=\\d)", remove = TRUE)
+
+emByTransmission$Gears <- replace(emByTransmission$Gears, is.na(emByTransmission$Gears), "CVT")
+
+sorted_emByTransmission <- emByTransmission %>%
+  arrange(desc(AvgCO2))
+
+ggplot(emByTransmission, aes(x = Gears, y = AvgCO2, fill = Type)) +
+  geom_bar(stat = "identity", position = "dodge") +
+  scale_fill_viridis(discrete = TRUE, option = "turbo") +
+  xlab("Broj brzina") +
+  ylab("Emisija ugljen-dioksida (g/km)") +
+  ggtitle("Prosečna emisija ugljen-dioksida po broju brzina i tipu prenosa") +
+  theme_minimal()
+
+```
+Ovde još bolje primećujemo trendove koje smo razdvojeno objašnjavali u gornjim primerima:
+
+*10,9,8 u opšte ne postoje u čisto manuelnim opcijama, čisti automatici bez mogućnosti ručne promene brzine zagađuju najviše
+
+*4-brzinci takođe ne postoje u manuelnim opcijama, u velikom broju slučajeva ovako mali broj stepena prenosa će imati stariji tipovi automatskih menjača a i odatle dolazi veća količina zagađenja iz razloga koje smo već naveli.
+
+*5,6,7 - primećujemo da manuelni menjači manje zagađuju od automatika u pojedinim slučajevima, ali ovde već na scenu stupaju automatici sa većim brojem stepena prenosa koji su moderniji ("The first six-speed automatic was the ZF 6HP26 transmission, which debuted in the 2002 BMW 7 Series (E65)" - izvor: https://en.wikipedia.org/wiki/Automatic_transmission) i samim tim automobili koji ih koriste manje zagađuju.
+
+Generalno, tip transmisije je dobar indikator toga koliko će auto zagađivati, ali preovlađivanje automatika može rezultirati u tome da zaključci na osnovu ovog skupa podataka budu lošiji ako se primene direktno na podatke sa naših prostora gde se u najvećem broju slučajeva voze automobili sa manuelnim transmisijama.
+
+
+## Provera kolone Fuel Type
+
+Možemo proveriti raspodelu automobila po tipovima goriva.
+
+```{r}
+fuelTypeCount <- co2_emission %>%
+  count(FuelType, name = "Vehicles")
+
+fuelTypeCount
+```
+Pošto možemo primetiti da imamo samo jedno vozilo u datasetu koje koristi prirodni gas možemo ga ukloniti (1 naspram 7000)
+
+```{r}
+co2_emission<- co2_emission[co2_emission$FuelType != "Natural Gas", ]
+```
+
+
+
+```{r}
+fuelTypeCountPlot <- ggplot(co2_emission, aes(x = reorder(FuelType, FuelType, function(x) -length(x)))) +
+  geom_bar() +
+  labs(title = "Raspodela podataka po koloni Fuel Type", x = "Tip goriva", y = "Broj automobila") +
+  theme(axis.text.x = element_text(angle = 60, hjust = 1))
+
+fuelTypeCountPlot
+```
+
+Vidimo da se u Kanadi uglavnom voze benzinci, razlika je samo da li je gorivo malo kvalitetnije ili ne.
+Sada možemo proveriti prosečnu emisiju CO2 po tipu goriva.
+
+```{r}
+emByFuelType = co2_emission %>%
+  group_by(FuelType) %>%
+  summarize(AvgCO2 = mean(CO2Emission))
+
+emByFuelType_df <- as.data.frame(emByFuelType)
+
+colnames(emByFuelType_df) <- c("Fuel Type", "Average CO2 Emission(g/km)")
+
+print(head(emByFuelType_df, 15), right=F)
+
+```
+
+```{r}
+data <- data.frame(
+  FuelType = emByFuelType$FuelType,
+  CO2Emission = emByFuelType$AvgCO2
+)
+
+data <- left_join(data, fuelTypeCount, by = "FuelType")
+
+ggplot(data, aes(x = FuelType, y = CO2Emission, label = Vehicles)) +
+  geom_bar(stat = "identity", position = "dodge") +
+  geom_text(aes(color = "Broj vozila"), vjust = -0.5, size = 3) +
+  xlab(" ") +
+  ylab("Emisija ugljen-dioksida (g/km)") +
+  ggtitle("Prosečna emisija ugljen-dioksida po tipu goriva") +
+  theme(axis.text.x = element_text(angle = 50, hjust = 1)) +
+  scale_color_manual(values = "blue", guide = guide_legend())+
+  guides(color = guide_legend(override.aes = list(label = "123"), title = "Legenda:")) 
+
+```
+
+Na osnovu ovakvog plota teško da možemo da zaključimo nešto korisno, veoma je čudno da u proseku etanol proizvodi više ugljen dioksida od dizela ili regularnog benzina, posebno ako se misli na čist etanol kao gorivo jer se etanol dodaje kao aditiv regularnom benzinu i čak premium benzinu u količini do 10%. Možemo da proverimo kakva to vozila koriste čist etanol. Možemo da proverimo kubikaže takvih vozila i da pretpostavimo da li bi trebalo da imaju ovako veliko zagađenje.
+
+```{r}
+ethanolVehicles<- subset(co2_emission, FuelType == "Ethanol")
+
+ethanolVehicles %>%
+  count(ethanolVehicles$EngineSize, name = "Vehicles") %>%
+  arrange(desc(Vehicles))
+
+```
+Na prvi pogled deluje da etanol najviše koriste vozila sa većim kubikažama tako da nije čudno da u proseku zagađuju više, posebno zato što imamo samo 370 ovakvih vozila naspram skoro 6900 vozila koja idu na benzin.
+
+Deluje možda da ova kolona i nije dobar izbor za predviđanje emisije CO2 ali ćemo je svakako isprobati u kasnijem radu.
+
+
+## Provera kolona Fuel Consumption
+
+Za početak vidimo da imamo dve jako slične kolone, tačnije, Fuel Consumption Comb(L/100km) i Consumption Comb(MPG), one bi trebale da pretstavljaju istu stvar, tačnije potrošnju goriva na otvorenom i u gradu, a razlika je samo u rasporedu promenljivih. Fuel Consumption Comb označava koliko litara trošimo da bi prešli 100km, a Consumption Comb MPG nam govori o tome koliko milja možemo da pređemo trošeći jedan galon goriva. Pored toga što su ove dve veličine obrnutno srazmerne, takođe imamo razliku u mernim jedinicama tj. Fuel Consumption Comb koristi metričke jedinice dok Consumption Comb koristi imperijalne jedinice mere. Na osnovu ovoga možemo se osloniti na jednu od ove dve kolone pri pravljenju modela jer u načelu označavaju istu stvar.
+
+```{r}
+
+ggplot(co2_emission, aes(x = FCComb, y = FCCombMPG)) +
+  geom_point() +
+  labs(title = "Korelacija između kombinovane potrošnje goriva u litrima i u miljama po galonu", x = "Potrošnja u litrima na 100 km", y = "Potrošnja u miljama po galonu") +
+  theme_minimal()
+
+```
+
+Sa scatterplota možemo videti da imamo jaku, nelinearnu, negativnu korelaciju između ove 2 varijable, tačnije između potrošnje goriva na otvorenom i u gradu, u litrima i miljama po galonu, što je i očekivano.
+
+Možemo dalje prebrojati koliko imamo jedinstvenih vrednosti za Fuel Consumption kolone, tačnije potrošnju po gradu, na otvorenom, kombinovana i u miljama po galonu respektivno.
+
+```{r}
+n_distinct(co2_emission$FCCity)
+```
+
+```{r}
+n_distinct(co2_emission$FCHighway)
+```
+
+```{r}
+n_distinct(co2_emission$FCComb)
+```
+
+```{r}
+n_distinct(co2_emission$FCCombMPG)
+```
+Pošto vidimo da imamo pozamašan broj jedinstvenih vrednosti u ovim kolonama, nema baš nekog smisla da prebrojavamo koliko kakvih potrošnja ima. Takođe malo bi teže bilo izvesti neki zaključak na osnovu samo navedenih kolona. Rešenje bi bilo da ukombinujemo ove kolone sa još nekom promenljivom, npr. tip goriva.
+Uzećemo kolonu kombinovane potrošnje, tačnije potrošnje i u gradu i na otvorenom.
+
+```{r}
+ggplot(co2_emission, aes(x = FCComb, y = CO2Emission, color = FuelType)) +
+  geom_point() +
+  labs(title = "Emisija ugljen-dioksida u odnosu na potrošnju goriva po vrsti goriva", x = "Potrošnja goriva (Litara na 100km)", y = "Emisija ugljen-dioksida (g/km)")
+```
+
+Sa ovog grafa možemo zaključiti da najveći porast emisija CO2 imamo kod dizela, pošto ista potrošnja kod benzina i etanloa rezultira u manjem zagađenju (za potrošnju od 10L/km zagađujemo manje ako vozimo benzinca) i to tim redosledom tj. kod etanola imamo najmanje zagađenje u odnosu na potrošnju goriva.
+
+Par zavisnih kolona koje mogu imati nekakvu povezanost su fuel consumption i vehicle class. U smislu da tip karoserije može uticati na potrošnju goriva (veće karoserije imaju veći otpor vazduha, manji je fokus na aerodinamičnosti vozila). Na osnovu ove pretpostavke ćemo izvući proseke kombinovane potrošnje i uporediti ih na različitim tipovima karoserija.
+
+**Povezanost između potrošnje goriva i veličine motora kao i broja cilindara ćemo smatrati trivijalnom i nećemo je proveravati vizuelno**
+
+```{r}
+consumptionByClass = co2_emission %>%
+  group_by(VehicleClass) %>%
+  summarize(AvgConsumption = mean(FCComb)) %>%
+  arrange(desc(AvgConsumption))
+
+consumptionByClass_df <- as.data.frame(consumptionByClass)
+
+colnames(consumptionByClass_df) <- c("Vehicle Class", "Average Fuel Consumption")
+
+print(head(consumptionByClass_df, 15), right=F)
+
+```
+```{r}
+ggplot(consumptionByClass, aes(x = reorder(VehicleClass, AvgConsumption), y = AvgConsumption)) +
+  geom_bar(stat = "identity", position = "dodge") +
+  xlab("Tip karoserije") +
+  ylab("Kombinovana potrošnja goriva (L/100km)") +
+  ggtitle("Prosečna potrošnja po tipu karoserije vozila") +
+  theme(axis.text.x = element_text(angle = 70, hjust = 1))
+```
+
+Potrošnja goriva zaista zavisi dosta od tipa karoserije, veće karoserije imaju tendenciju da troše više goriva i na osnovu toga da više zagađuju. Ali opet imamo problem kao što smo imali gore kada smo upoređivali zagađenje i tip karoserije a to je da vozila manjih karoserija troše više od nekih vozila većih tako da ne možemo biti potpuno sigurni u ovaj zaključak ali je veza svakako tu.
+
+Nakon toga možemo proveriti kako nam potrošnja goriva zavisi od marke vozila.
+
+```{r}
+consumptionByMake = co2_emission %>%
+  group_by(Make) %>%
+  summarize(AvgConsumption = mean(FCComb)) %>%
+  arrange(desc(AvgConsumption))
+
+consumptionByMake_df <- as.data.frame(consumptionByMake)
+
+colnames(consumptionByMake_df) <- c("Vehicle Make", "Average Fuel Consumption")
+
+print(head(consumptionByMake_df, 15), right=F)
+
+```
+
+```{r}
+ggplot(consumptionByMake, aes(x = reorder(Make, AvgConsumption), y = AvgConsumption)) +
+  geom_bar(stat = "identity", position = "dodge") +
+  xlab("Marka vozila") +
+  ylab("Kombinovana potrošnja goriva (L/100km)") +
+  ggtitle("Prosečna potrošnja po proizvođaču vozila") +
+  theme(axis.text.x = element_text(angle = 70, hjust = 1))
+```
+Ovde primećujemo sličnu situaciju kao kada smo proverili pozvezanost emisije CO2 i marke, a to je da skupocene marke i marke iz SAD troše više goriva od evropskih ili marki iz Azije. Ovakva raspodela ima smisla, ali još jednu stvar koju možemo potvrditi na osnovu ove dve prethodne provere je da je potrošnja goriva usko povezana sa količinom izduvnih gasova.
+
+Brisanje nepotrebnih vrednosti
+```{r}
+rm(colNamesDesc_df)
+rm(custom_col_names)
+rm(naCounts)
+rm(na_counts_long)
+rm(vehicleClassGroup)
+rm(vehicleClassOrdered)
+rm(emByMake_df)
+rm(emByMake)
+rm(vehicleClassCounts)
+rm(emByVehicleClass)
+rm(emByVehicleClass_df)
+rm(engineClasses)
+rm(emByEngineSize)
+rm(emByEngineSize_df)
+rm(data)
+rm(cylindersCount)
+rm(emByCylinders)
+rm(emByCylinders_df)
+rm(transmission_vehicles)
+rm(tranType)
+rm(emByGears)
+rm(emByGears_df)
+rm(emByTransmission)
+rm(sorted_emByTransmission)
+rm(fuelTypeCount)
+rm(emByFuelType)
+rm(emByFuelType_df)
+rm(ethanolVehicles)
+rm(consumptionByClass)
+rm(consumptionByClass_df)
+rm(consumptionByMake)
+rm(consumptionByMake_df)
+```
+
+
+Nakon svega, da proverimo da li je raspodela podataka u numeričkim kolonama normalna
+
+```{r}
+library(gridExtra)
+numCols <- co2_emission[sapply(co2_emission, is.numeric)]
+
+boxplot_list <- lapply(names(numCols), function(col_name) {
+  ggplot(numCols, aes_string(x = col_name)) +
+    geom_boxplot() +
+    labs(title = paste("Boxplot of", col_name))
+})
+
+grid.arrange(grobs = boxplot_list, ncol = 2)
+
+```
+
+gridExtra biblioteku koristimo kako bi štampali sve plotove u jednom koraku, kako ne bi zauzimali mesto.
+
+-Što se tiče veličine motora i broja cilindara, i ako imamo malo vrednosti nekih specifičnih veličina motora i broja cilindara, nećemo ih smatrati outlierima za sad pošto su te vrednosti realne i mogu se desiti, tj. nisu greška.
+
+-Za ostale numeričke kolone deluje da imamo puno outliera, ali to su sve realne vrednosti, neki motori će zagađivati mnogo više, neki mnogo manje, ali možemo u kasnijem roku da probamo da skaliramo te vrednosti kako bi manje vukle model.
+
+
+```{r}
+#seq_along iterise i daje nam i
+#u svim ce binwidth biti 1 sem u poslednjem gde ce biti 10 zbog ifelse
+
+histogram_list <- lapply(seq_along(names(numCols)), function(i) {
+  col_name <- names(numCols)[i]
+  
+  binwidth <- ifelse(i < length(numCols), 1, 10)
+  
+  ggplot(numCols, aes_string(x = col_name)) +
+    geom_histogram(binwidth = binwidth, fill = "blue", color = "black") +
+    labs(title = paste("Histogram of", col_name))
+})
+
+grid.arrange(grobs = histogram_list, ncol = 2)
+```
+
+Ovde možemo da primetimo da raspodela podataka u najvećem broju slučajeva ide ka desnoj strani plota (tj. da su right skewed) i da imamo dugačke repove koji označavaju ekstremne vrednosti, kolone nisu idealno normalno raspodeljene što može da loše utiče na naš model na dosta načina, pokušaćemo to da ispravimo kada budemo trenirali model.
+
+
+```{r}
+corr_matrix <- cor(select_if(co2_emission, is.numeric))
+
+corrplot(corr_matrix, is.corr = FALSE, method = 'color', col.lim = c(-1, 1), tl.col = 'black', tl.cex = 0.8,
+         col = COL2('RdBu'), cl.pos = 'b', addCoef.col = 'white')
+
+```
+
+Sa korelacione matrice mozemo uočiti da su nam sve numeričke kolone u jakoj korelaciji sa CO2 emisijom. Pored toga, ove kolone su u najvećem broju slučajeva u korelaciji međusobno tako da je diskutabilno koliko će dodavanje većeg broja prediktora biti korisno u modelu, ali ćemo to svakako ispitati.
+
+Za kategorijske promenljive ćemo proveravati usput kako utiču na modele i da li ih treba primenjivati
+
+## Podela podataka na test i train u odnosu 70:30
+
+```{r}
+  
+set.seed(123)
+
+levelsFT = c("Gasoline", "PremiumGasoline", "Ethanol", "Diesel")
+
+co2_emission$FuelType = factor(co2_emission$FuelType, levels = levelsFT)
+
+index_train <- sample(seq_len(nrow(co2_emission)), 0.7 * nrow(co2_emission))
+
+train <- co2_emission[index_train, ]
+
+test<- co2_emission[-index_train, ]
+
+```
+
+## PRVI MODEL ~ FCCity
+
+Za početak ćemo koristiti samo potrošnju po gradu, korelacija te kolone je dosta dobra (0.92)
+
+```{r}
+
+lmFCCity <- lm(CO2Emission ~ FCCity , data = train)
+
+summary(lmFCCity)
+```
+
+Na osnovu statistika možemo zaključiti da je potrošnja po gradu značajna za predviđanje emisija CO2:
+
+RSE nam je 23 jedinice mere, što nije loše pošto se naše vrednosti kreću od 100 do 500
+
+Multilple R2 nam opisuje 0.85 varijanse u modelu što je takođe poprilično solidno, dok Adjusted R2 ne odstupa, što
+je i očekivano pošto koristimo samo jedan prediktor
+
+F statistika je značajno velika a p vrednost dovoljno mala da možemo da odbacimo hipotezu da FCCity ne utiče na emisije CO2, tj. možemo reći da emisije CO2 zavise od potrošnje goriva u gradu.
+
+
+```{r}
+plot(lmFCCity, which = 1)
+```
+
+**Residuals vs Fitted**
+
+Na prvi pogled Residuals vs Fitted plot izgleda poprilično loše, za manje emisije ugljen dioksida model je poprilično precizan ali kako one rastu tako model počinje da ozbiljno da potcenjuje zagađenje, deluje kao da je modelu teško da predvidi zagađenje u slučaju da je potrošnja goriva velika, šta reći deluje da veza između potrošnje goriva i emisije CO2 i nije baš linearna. Pored toga, možemo videti i levkasti oblik raspodele, što ukazauje na heteroscedasticity.
+
+Sve ovo ne znači da je potrošnja loš prediktor, već da nećemo moći da konzistentno pretpostavaljamo vrednost emisija CO2, a veoma je moguće da loša rapodela podataka utiče dosta na ovakav model, tj. onaj dugi rep kod FCCity koji smo mogli da primetimo kada smo plotovali raspodelu podataka za tu kolonu.
+
+Dalje možemo ići u dva smera:
+
+1. Pretpostavi da je moguće predvideti emisiju CO2 korišćenjem linearne regresije:
+  
+Tada možemo probati da popravimo ove metrike tako što ćemo transformisati neki od prediktora ili čak i izlaz nekom od prostih transformacija (sqrt, log), što može otežati čitljivost ovog modela.
+
+Pokušati da otklonimo ove tačke sa visokom polugom korišćenjem neke od metoda za otkalnjanje outliera (IQR, Isolation Forest) što će uticati na sposobnost ovog modela da predviđa za ekstremne slučajeve.
+
+Dodati nove prediktore u model.
+
+2. Odustati od linearnog regresora i isprobati drugačije regresore koji se mogu bolje uklopiti sa ovako ne normalizovanim podacima.
+
+```{r}
+plot(lmFCCity, which = 2)
+```
+
+**Normal Q-Q**
+
+Ovde možemo proveriti da li je raspodela naših reziduala normalna i očigledno je da nije, šta reći imamo čak i "razdvajanje" tačaka, ali pošto naši podaci nisu bimodalni (imamo samo jednu "grbu" na histogramu) ovo je poprilično čudno, a to se možda može objasniti velikim brojem opservacija i time što imamo dosta ekstremnih vrednosti, ali svakako ovo je poprilično loše za model.
+
+Možemo proveriti kako na primer vrednost 2283 biva predviđena od strane našeg modela i kakva je ona u realnosti radi boljeg razumevanja.
+
+```{r}
+library(kableExtra)
+origRow <- train[2283, ]
+
+prediction <- predict(lmFCCity, newdata = origRow)
+
+origRow$predictions <- prediction
+
+origRow_kable <- kable(origRow, format = "html") %>%
+  kable_styling()
+
+origRow_kable
+```
+
+Vidimo problem a pored toga i potencijalno rešenje istog, problem je to što u predikciji mašimo za skoro celu pravu vrednost emisija CO2, tj. da prepostavljamo previše pošto je potrošnja velika, ali ono što model ne uzima u obzir je to da ovo vozilo troši etanol koji zagađuje manje, a to nas dovodi do rešenja a to je da dodamo tip goriva u model, što ćemo i isprobati nakon analize ovog modela.
+
+```{r}
+plot(lmFCCity, which = 3)
+```
+
+**Scale location**
+
+Ovaj plot nam omogućava da proverimo da li je varijansa naših reziduala jednaka, takođe imamo loše trendove i na ovom plotu, vidimo da se imamo skupljanje tačaka između 200 i 300 na X osi, i da crvena linija nije horizontalna, tako da imamo heteroscedasticity u modelu.
+
+Formalan način da se ovo proveri (i ako je ovde već očigledno) je da se koristi Breusch Pagan test:
+
+  Nulta hipoteza je da su reziduali ravnomerno raspodeljeni (homoscedasticity postoji)
+  
+  Alternativna hipoteza u slučaju da je p vrednost manja od 0.05 je da je prisutan heteroscedasticity
+  
+```{r}
+library(lmtest)
+bptest(lmFCCity)
+```
+
+P vrednost je apsurdno mala tako da nema govora o tome da su reziduali raspodeljeni ravnomerno.
+
+```{r}
+plot(lmFCCity, which = 5)
+```
+
+**Residuals vs Leverage**
+
+Ovde možemo videti koje tačke utiču dosta na naš model, tj. koje imaju visoku polugu
+
+Na primer tačka 199, možemo da proverimo šta se dešava s njom
+
+```{r}
+
+
+origRow <- train[199, ]
+
+prediction <- predict(lmFCCity, newdata = origRow)
+
+origRow$predictions <- prediction
+
+origRow_kable <- kable(origRow, format = "html") %>%
+  kable_styling()
+
+origRow_kable
+```
+
+Evidentno je da ovo vozilo troši masivnu količinu goriva u gradu, opet se dešava da vozilo koristi etanol, do duše ovde je već zagađenje poprilično. Videćemo šta ćemo raditi dalje sa ovakvim primerima, možda je moguće da će se ovakve tačke bolje uklapati kako budemo dalje razvijali model.
+
+## DRUGI MODEL ~ FCCity + FuelType
+
+Sledeće što ćemo probati je da uvrstimo tip goriva u model kako ne bi imali problem sa vozilima koja koriste etanol,
+
+Pre nego što dodamo ovaj faktor u model bilo bi ispravno enkodirati ga, ali to nećemo uraditi jer R sam po sebi obradjuje faktorske promenljive tj. enkodira ih, u suprotnom bi mi to morali da uradimo i pored toga bi morali da navedemo naziv svake od novih kolona u formuli.
+
+```{r}
+lmCT <- lm(CO2Emission ~ FCCity + FuelType , data = train)
+
+summary(lmCT)
+```
+
+Ono što možemo primetiti prvo a tiče se automatskog enkodiranja koje smo pominjali je to da nam praktično fali jedna kategorija (dizel), a to je zato što ju je R automatski odbacio zbog problema multikolinearnosti, tj. ako bi imali sve kategorije u različitim kolonama one bi bile savršeno medjusobno korleisane jer opisuju jednu stvar, ovako se jedna od kategorija odbacuje i pretpostavlja se da ako je za sve ostale kategorije pripadnost 0 (0 u svim kolonama kategorija originalne promenljive) da taj red pripada odbačenoj kategoriji i ta odbačena se koristi kao baseline, tj. bazna vrednost za interpretaciju i kalkulaciju koeficijenata ostalih kolona. 
+
+To bi sve trebali da izvedemo ručno u slučaju da smo koristili one hot enkodiranje (ovaj fenomen se naziva dummy variable trap).
+
+Svi tipovi goriva su očigledno značajni za model.
+
+RSE nam je sa 23 spao na 8.5, što je višestruko poboljšanje.
+
+Multilple R2 je skočio sa 0.85 na skoro 0.98 što je takođe odlično, a pored toga Adjusted R2 je identičan. 
+
+F statistika je značajno velika a p vrednost dovoljno mala da možemo da kažemo da su ove dve kolone (FCCity i FuelType) definitivno dobri 
+prediktori emisija CO2.
+
+```{r}
+plot(lmCT, which = 1)
+```
+
+**Residuals vs Fitted**
+
+Vidimo očigledno poboljšanje i na ovom plotu, više nemamo odvojenu grupu reziduala gde model potcenjuje emisiju CO2, ali i dalje problem predstavljaju veće vrednosti emisija CO2, tačke se raspršuju kod njih što može značiti da i dalje imamo nekakav heteroscedasticity. Verovatno je da vrednosti sa visokom polugom utiču na ovo ili je to neko ponašanje koje naš model još ne može da objasni pošto i dalje modeliramo samo na osnovu dva prediktora.
+
+```{r}
+plot(lmCT, which = 2)
+```
+
+**Normal q-q**
+
+Otklonili smo prekid za poprilično veliki broj tačaka, raspodela deluje koliko toliko normalno raspodeljena ali i dalje imamo "repove" koji mogu da ukazuju na one vrednosti sa visokom polugom. Možemo da pogledamo vrednost 3770.
+
+```{r}
+origRow <- train[3770, ]
+
+prediction <- predict(lmCT, newdata = origRow)
+
+origRow$predictions <- prediction
+
+origRow_kable <- kable(origRow, format = "html") %>%
+  kable_styling()
+
+origRow_kable
+```
+
+Opet nailazimo na ovaj problematični Chevrolet, ali sada barem ne mašimo za 100 jedinica mere kao pre, ali i dalje ovo nije baš precizna predikcija, svakako ovo je tačka sa visokom polugom u ovom slučaju pošto je potrošnja po gradu ovoliko velika.
+
+Ideje koje možda mogu to popraviti su:
+
+  Da ne koristimo FCCity već FCComb kako bi bolje izbalansirali potrošnju, potrošnja će uvek biti
+  veća po gradu nego na autoputu tako da bi ovakve stvari trebale malo manje da dolaze do
+  izražaja.
+  
+  Da otklonimo ove vrednosti u potpunosti što povlači za sobom lošije pretpostavke modela ako do ovakvih 
+  vrednosti dođe   u realnosti jer su moguće, ovaj Chevrolet ima motor od 8 cilindara sa zapreminom od 6 
+  kubika, nije čudno što troši ovoliko, tj. to nije greška.
+  
+  Da uvrstimo kolone koje se tiču broja cilindara i kubikaže u model.
+  
+  Da probamo da transformišemo FCCity nekom funckijom (log, sqrt npr.)
+  
+```{r}
+plot(lmCT, which = 3)
+```
+
+**Scale location**
+
+Sada je situacija dosta bolja ali i dalje vidimo da tačke nisu ravnomerno raspoređene po plotu što ukazujue na nekonstantnu varijansu reziduala.
+
+```{r}
+plot(lmCT, which = 5)
+```
+
+**Residual vs Leverage**
+
+Ovde je takođe bolja situacija, i dalje imamo neke uticajinje tačke ali nemamo ih puno kao u prethodnom plotu.
+
+## Korišćenje FCComb umesto FCCity i log transformacija zavisne(CO2 emission) i prediktora(FCComb)
+
+Prvo da pogledamo ponovo raspodele FCComb i CO2 emission
+
+```{r}
+ggplot(co2_emission, aes(x = CO2Emission)) +
+  geom_histogram(binwidth = 12, color = "black", fill = "cyan", alpha = 0.3)
+```
+
+Za raspodelu co2 emisija vidimo da imamo nakrivljenost na desno (right skew),takođe popriličan rep vrednosti na desnoj strani plota (desno nakrivljena pošto je 'rep' distribucije na desnoj strani plota, a 'grba' je levo, za nakrivljenost na levo je obrnuto).
+
+Šta se dešava ako logaritmujemo ove vrednosti:
+
+```{r}
+ggplot(co2_emission, aes(x = log(CO2Emission))) +
+  geom_histogram(binwidth = 0.09, color = "black", fill = "cyan", alpha = 0.3)
+```
+
+Vidimo da je sada rep više levo tako da je ovo možda i malo previše agresivna transformacija (sqrt je manje agresivna ali proizvodi lošije rezultate u modelu tako da je nećemo koristiti), ali svakako su sada podaci bolje raspodeljeni.
+
+Slično za FCComb:
+
+```{r}
+ggplot(co2_emission, aes(x = FCComb)) +
+  geom_histogram(binwidth = 0.5 , color = "black", fill = "cyan", alpha = 0.3)
+```
+
+Vidimo sličnu raspodelu kao i u gornjem slučaju, primenjujemo istu metodu:
+
+```{r}
+ggplot(co2_emission, aes(x = log(FCComb))) +
+  geom_histogram(binwidth = 0.07 , color = "black", fill = "cyan", alpha = 0.3)
+```
+
+Na osnovu ovih plotova možemo da pretpostavimo da će ovakve transformacije pomoći modelu da bolje zaključuje pošto je jedna od osnovnih pretpostavki OLS metode normalnost podataka, ali u isto vreme će malo zakomplikovati interpretaciju modela na šta ćemo se osvrnuti u sledećim koracima.
+
+## TREĆI MODEL ~ log zavisne kolone i prediktora i FCComb umesto FCCity
+
+```{r}
+lmCombT <- lm(log(CO2Emission) ~ log(FCComb) + FuelType, data = train)
+
+summary(lmCombT)
+```
+
+Već kod RSE možemo da uvidimo problem koji logaritmovanje izlaza izaziva, u smislu interpretacije istog, a to je da ne možemo da poredimo ovu vrednost u kontekstu drugih modela dok je ne vratimo u originalno stanje.
+
+Nešto slično će morati da se uradi kada budemo komentarisali slope i intercept ali to ćemo izvesti ako utvrdimo da je ovaj model najbolji koji možemo dobiti.
+
+Hajde da proverimo RSE u kontekstu prethodnih modela
+
+```{r}
+origRSE = exp(summary(lmCombT)$sigma)
+cat("RSE u originalnoj razmeri pre log-log transformacije:", origRSE)
+```
+
+Ovo je višestruku poboljšanje i svakako deluje veoma precizno, čak možda i previše
+
+R2 i Adjusted R2 su identnični sa vrednošću od 0.9972. Ovakva vrednost deluje previše dobra da bi bila istinita, može biti da model overfittuje (i ako imamo samo dva prediktora), svakako ćemo proveriti model nad testnim podacima ako zaključimo da je ovo najbolje što možemo da uradimo.
+
+F statistika i p vrednost i dalje ukazuju da je model statistički značajan.
+
+
+```{r}
+plot(lmCombT)
+```
+
+U svim plotovima vidimo odlične karakteristike ali jedna stvar koju bi ovde mogli da uradimo je da uklonimo ručno opservaciju 2283 pošto ona prema Residuals vs Leverage plotu leži na 2 Kukove distance i deluje kao najproblematičnija tačka sa visokom polugom, ostale ne deluju toliko uticajno.
+
+Imamo još nekih tačaka koje odstupaju od generalnog trenda, but variety is the spice of life tako da ih nećemo dirati (za sada)
+
+```{r}
+train <- train[-2283, ]
+```
+
+## Model log-log CO2emissions ~ FCComb + FuelType bez vrednosti 2283
+
+```{r}
+lmLLCT <- lm(log(CO2Emission) ~ log(FCComb) + FuelType, data = train)
+
+summary(lmLLCT) 
+```
+ovim manevrom smo uspeli da smanjimo RSE na 0.01098 sa 0.01247
+
+Takođe imamo malo poboljšanje R2
+
+F statistika je još veća nego u prethodnom modelu, a p vrednost je i dalje mnogo manja od 0.05 tako da je i dalje sve dobro.
+
+```{r}
+plot(lmLLCT)
+```
+
+Na plotovima i dalje primećujemo dobra svojstva ali ono što sada možemo videti malo bolje je prisustvo heteroscedasticity-a u modelu do duše ne značajno, a i da imamo dosta tačaka koje odstupaju od trendova, tako da sledeće što možemo da probamo jeste da otklonimo te uticajnije tačke (iz celog dataseta pa ponovo split na test i train, seed je isti tako da bi rezultati trebali da budu isti u tom pogledu)
+
+Ekstremne vrednosti ćemo otklanjati IQR metodom:
+```{r}
+
+lengthSave = length(co2_emission$FCComb)
+
+removeOutliersIQR <- function(data, column) {
+  q1 <- quantile(data[[column]], 0.25)
+  q3 <- quantile(data[[column]], 0.75)
+  iqr <- q3 - q1
+  lower_bound <- q1 - 1.5 * iqr
+  upper_bound <- q3 + 1.5 * iqr
+
+  data[!(data[[column]] < lower_bound | data[[column]] > upper_bound), ]
+}
+
+co2_emission <- removeOutliersIQR(co2_emission, "CO2Emission")
+
+co2_emission <- removeOutliersIQR(co2_emission, "FCComb")
+
+lengthSave
+length(co2_emission$FCComb)
+
+co2_emission$FuelType = factor(co2_emission$FuelType, levels = levelsFT)
+
+index_train <- sample(seq_len(nrow(co2_emission)), 0.7 * nrow(co2_emission))
+
+train <- co2_emission[index_train, ]
+
+test<- co2_emission[-index_train, ]
+
+```
+
+Sada ponovo treniramo model
+
+```{r}
+lmLLCTNoOutliers <- lm(log(CO2Emission) ~ log(FCComb) + FuelType, data = train)
+
+summary(lmLLCTNoOutliers) 
+```
+
+Na osnovu vrednosti za RSE i F statistike deluje da smo zapravo pogoršali model ovom transformacijom tako da odustajemo od ovog pristupa za sad.
+
+Hajde da proverimo ovaj model nad testnim skupom:
+
+```{r}
+testSave = test
+
+columns_to_log <- c("CO2Emission", "FCComb")
+testSave[columns_to_log] <- log(test[columns_to_log])
+
+log_predictions <- predict(lmLLCT, newdata = testSave)
+
+predictions <- exp(log_predictions)
+
+library(Metrics)
+
+actual_values <- test$CO2Emission
+
+rmse_value <- rmse(predictions, actual_values)
+mae_value <- mae(predictions, actual_values)
+
+cat("RMSE:", rmse_value, "\n")
+cat("MAE:", mae_value, "\n")
+```
+
+Veće greške više utiču na RMSE nego na MAE, a možemo reći da MAE posmatra sve greške jednako, svakako u našem modelu ove dve greške su slične što je dobra karakteristika, ono što nije dobro je to da je ta greška kod nas masivna, 200 jedinica, ovaj model ćemo definitivno odbaciti. 
+
+(Možda je i slučaj da nam back transformacija nije dobra, tj. da ne možemo dobiti pravu vrednost tako što radimo ovde, korišćenjem e^prediction, ali nakon 6 sati gubljenja vremena pokušavajući da nadjemo drugačiji način odustajemo od ovog modela )
+
+Pravi R2, tj. ovaj sa test podataka je 0.85 što nam govori da smo opisali 85% varijanse u podacima, to nije loše ali ono što nije dobro je to da je R2 sa train podacima bio 0.99, što može da znači da naš model overfittuje.
+
+Možemo da probamo da napravimo bolji model korišćenjem drugačijih prediktora što ćemo i uraditi
+
+## Model bez log transformacija ali sa FCComb umesto FCCity
+
+```{r}
+lmCTNoLog= lm(CO2Emission ~ FCComb + FuelType, data = train)
+summary(lmCTNoLog)
+```
+
+I dalje vidimo dobre rezultate u plotu, grešimo za 3.8 jedinca
+
+R2 je odličan sa 0.9951
+
+F statisitka je manja nego u prethodnim modelima ali i dalje dovoljno velika i p vrednost je dovoljno mala, ovo je statistički važan model
+
+```{r}
+plot(lmCTNoLog)
+```
+
+Na statističkim plotovima primećujemo da imamo nekakvu vrstu artefakta koja se odlikuje dijagonalnim rasprostranjenjem jednog dela tačaka na Residuals vs Fitted plotu, takođe na scale location plotu primećujemo čudne obrasce.
+
+Na qq plotu takođe možemo primetiti loše odlike.
+
+Na residuals vs leverage možemo videti 3 različite grupe tačaka, dok prva grupa sa leve strane nema neki primetan obrazac, druge dve imaju, zašto?
+
+Prva stvar koja pada napamet je da ovo izazivaju tipovi goriva, tj. da automatsko enkodiranje u modelu koje odbacuje jednu kategoriju goriva izaziva ovakvo ponašanje.
+
+Možemo da probamo da sami enkodiramo ovu promenljivu kako bi probali da otklonimo ovaj problem.
+
+```{r}
+dummy_variables <- model.matrix(~FuelType - 1, data = train)
+
+train<- cbind(train, dummy_variables)
+```
+
+Ovo je varjanta one hot enkodiranja, proizvodi zasebne kolone za sve kategorije, i sada bi trebali da odbacimo jednu kolonu koja će biti pretpostavljena na osnovu pripadnosti reda u ostale 3 (imamo 4 tipa goriva), ali eksperimenta radi zardžaćemo sve kolone da vidimo šta će se desiti
+
+```{r}
+lmManualEncode <- lm(CO2Emission ~ FCComb + FuelTypeGasoline + FuelTypePremiumGasoline + FuelTypeDiesel + FuelTypeEthanol, data = train)
+summary(lmManualEncode)
+```
+Ono što govori da smo sve ovo radili za džabe su identični rezultati, a poredn njih i ovaj warning
+
+**Coefficients: (1 not defined because of singularities)**
+
+Što znači da model sam po sebi odbacuje jednu od kategorija kada vrši treniranje, možemo da primetimo da su statistike za prediktor
+FuelTypeEthanol NA, tj. on je bio odačen, u suprotnom bi imali savršenu multikolinearnost između ovih kategorija, svakako ovo se mora uraditi ovako hteli mi to ili ne pošto se ta odbačena kolona uzima kao baza za kalkulacije ostalih.
+
+To znači da rešenje našeg problema leži negde drugde, idemo dalje.
+
+```{r}
+plot(lmManualEncode, which = 5)
+```
+
+Ove polukružne oblike koje primećujemo na Residuals vs Leverage plotu možemo objasniti time da za neke dve grupe goriva važi da imaju dosta veliki uticaj na naš linearan model a da u isto vreme grešimo u njihovom predvidjanju i to što im je uticaj veći da više grešimo.
+
+Nešto nam fali u modelu očigledno, ne možemo da objasnimo emisije CO2 samo sa potrošnjom i tipom goriva. Ali da li kombinacija ove dve promenljive može to da uradi, u trenutnom slučaju gledamo kako potrošnja i tip goriva deluju na emisije odvojeno, a znamo da će potrošnja zavisiti dosta od tipa goriva, dizel u velikom broju slučajeva će imati manju potrošnju nego običan benzin, na osnovu toga u model možemo da ubacimo interakciju izmedju ova dva prediktora.
+
+```{r}
+lmFinal = lm(CO2Emission ~ FCComb + FuelType + (FCComb * FuelType), data = train)
+summary(lmFinal)
+```
+
+Primećujemo pad RSE, za celu jedinicu mere, što je solidno u ovom slučaju (pad sa 3.8 na 2.8)
+
+R2 i Adjusted R2 su identični i imamo blagi porast i u toj statistici, što je takođe dobro
+
+P vrednost nam ukazuje na to da je model statistički bitan.
+
+```{r}
+plot(lmFinal)
+```
+
+Na Residuals vs Fitted vidimo da naši reziduali u velikoj većini ne odstupaju puno od 0, što je odlično.
+
+Na qq plotu vidimo mnogo bolja svojstva, normalnost reziduala je prihvatljiva, sem za tačku 58 (to je tačka 2283 koju smo već uklanjali, ona nije outlier već ima visoku polugu pa je ostala u datasetu kada smo ga čistili, nju ćemo skloniti)
+
+Na scale localtion plotu vidimo blag oblik levka, i linija nije savršeno horizontalna ali to ćemo ostaviti za sad takvim i videti šta se dešava nakon što otklonimo tačku sa visokom polugom (58)
+
+Evidentno je da smo bili u pravu povodom 58. reda pošto ova tačka leži van linija Kukove distance, definitivno ćemo je otkloniti.
+
+```{r}
+train <- train[-58,]
+```
+
+```{r}
+lmFinal = lm(CO2Emission ~ FCComb + FuelType + (FCComb * FuelType), data = train)
+summary(lmFinal)
+```
+
+Smanjili smo RSE tako da smatramo ovo uspešnim potezom.
+
+```{r}
+plot(lmFinal)
+```
+
+Na statističkim plotovima vidimo mesta za dalja poboljšanja ovog modela ali ćemo ga smatrati finalnim,
+
+Problemi koje primećujemo:
+
+Imamo trend potcenjivanje vrednosti CO2 sa porastom realnih vrednost
+
+Deluje da imamo heteroscedasticity koji je verovatno povezan sa prethodnim problemom
+
+Reziduali i dalje nisu baš normalno raspodeljeni
+
+Interpretaciju koeficijenata ćemo obaviti nakon testiranja modela nad testnim skupom.
+
+```{r}
+
+dummy_variables <- model.matrix(~FuelType - 1, data = test)
+
+test<- cbind(test, dummy_variables)
+```
+
+
+```{r}
+
+predictions <- predict(lmFinal, newdata = test)
+
+actual_values <- test$CO2Emission
+
+rmse_value <- rmse(predictions, actual_values)
+mae_value <- mae(predictions, actual_values)
+
+cat("RMSE:", rmse_value, "\n")
+cat("MAE:", mae_value, "\n")
+```
+
+Vidimo odlične rezultate modela nad testnim skupom
+
+RMSE i MAE su slični, i pored toga njihova vrednost je oko 2 jedinice mere što je odlično pošto nam se vrednosti kreću od 100 do 400.
+
+```{r}
+plot(actual_values, predictions, main = "Actual vs Predicted",
+     xlab = "Actual CO2 Emission", ylab = "Predicted CO2 Emission")
+
+abline(a = 0, b = 1, col = "red")
+
+```
+
+Sa actual vs predicted plota možemo da vidimo da smo poprilično precizni sa predikcijama, naše tačke konformišu dijagonalnoj liniji kroz plot što znači da ne mašimo mnogo u pretpostavkama.
+
+## Spoljašnji podaci za testiranje
+
+Pošto smo dobili rezultate koji su previše dobri da im poverujemo, možemo da uzmemo još jedan dataset i da testiramo nad njim.
+
+Pored toga, ovim datasetom možemo još jednom da testiramo hipotezu sa početka da model treniran nad podacima iz serverne Amerike neće predviđati dobro za podatke koji su na primer iz Evrope, a ovaj dataset sadrži podatke o registrovanim vozilima između 2000 i 2013 u Velikoj Britaniji.
+
+Izvor dataseta:
+https://old.datahub.io/dataset/car-fuel-consumptions-and-emissions
+
+```{r}
+ukData = read_csv("data.csv")
+
+problems(ukData)
+```
+
+Dataset ima neke greške ali pošto ima 45000 redova možemo da ih samo sklonimo, ne gubimo ništa.
+
+```{r}
+rows_with_issues <- c(45495, 45496)
+
+ukData<- ukData[-rows_with_issues, ]
+
+str(ukData)
+```
+
+Suzdržaćemo se od detaljne analize ovog dataseta ali ono što je bitno jeste da ovaj dataset poseduje kolone koje odgovaraju našim prediktorskim kolonama u modelu, a to su tip goriva i kombinovana potrošnja.
+
+Stoga, kolone koje nas zanimaju su:
+
+**fuel_type** - tip goriva, za ovu kolonu moramo da preimenujemo nazive kategorija i da je enkodiramo
+
+**combined_metric** - pošto nisu dati opisi za kolone, moraćemo da se malo bavimo pretpostavljanjem, u originalnom datasetu kombinovana potrošnja je računata ovako:
+
+City and highway fuel consumption ratings are shown in litres per 100 kilometres (L/100 km) - **the combined rating (55% city, 45% hwy)** is shown in L/100 km and in miles per gallon (mpg)
+
+Račun sprovodimo nad kolonama urban metric i extra urban metric (extra - van, u ovom slučaju van grada)
+
+```{r}
+combCalculated = ukData[1,]$urban_metric * 0.55 + ukData[1,]$extra_urban_metric * 0.45
+
+combCalculated
+ukData[1,]$combined_metric
+
+```
+
+Ipak ovde nije korišćena ista metodologija, do duše svakako možemo da sračunamo vrednosti koje nama odgovaraju
+
+```{r}
+ukDataClean <- data.frame(
+  FCComb = ukData$urban_metric * 0.55 + ukData$extra_urban_metric * 0.45,
+  CO2Emission = ukData$co2
+)
+```
+
+A sada za tipove goriva:
+
+```{r}
+unique(ukData$fuel_type)
+```
+
+Ovde uvidjamo par problema, a to je da nemamo direktno preslikavanje tipova goriva kakvi postoje u našem datasetu za trening
+
+Petrol - Nemamo distinkciju izmedju običnog benzina i premium benzina, sve ćemo ih spakovati u običan benzin i nadati se najboljem, svakako mogli smo u originalnom modelu da spojimo premium benzin i običan u jednu promenljivu jer smo videli pri analizi podataka da ne postoji nekakva značajna razlika između ova dva goriva kada su u pitanju emisije CO2, što može da znači i da model istreniran nad takvim podacima može da dođe do sličnih zaključaka.
+
+Petrol/E85 - (https://en.wikipedia.org/wiki/E85) označava mešavinu etanol:benzin u odnosu 85:15, pošto veliki udeo ovog goriva uzima etanol, ovaj tip goriva ćemo smatrati pandanu etanola iz našeg trening dataseta.
+
+Disel - Dizel je dizel svakako, ali ovde očigledno imamo kolone koje predstavljaju hibridne tipove motora kao što su Diesel Electric i Elictricity/Diesel za koje ćemo sigurno mašiti
+
+```{r}
+
+transformed_fuel_type <- case_when(
+  ukData$fuel_type == "Petrol" ~ "Gasoline",
+  grepl("Petrol / E85", ukData$fuel_type) ~ "Ethanol",
+  ukData$fuel_type == "Diesel" ~ "Diesel",
+  TRUE ~ NA_character_
+)
+
+ukDataClean <- cbind(ukDataClean, FuelType = transformed_fuel_type)
+
+ukDataClean <- ukDataClean[complete.cases(ukDataClean$FuelType), ]
+
+ukDataClean$FuelType = factor(ukDataClean$FuelType, levels = levelsFT)
+
+rm(ukData)
+```
+
+Koristimo iste nivoe koje smo koristili za faktorizaciju i u originalnom datasetu kako bi imali iste enkodirane kolone.
+
+```{r}
+str(ukDataClean)
+```
+
+Sada da enkodiramo ove vrednosti.
+
+```{r}
+dummy_variables <- model.matrix(~FuelType - 1, data = ukDataClean)
+
+ukDataClean<- cbind(ukDataClean, dummy_variables)
+str(ukDataClean)
+```
+
+Sada je dataset spreman za vršenje pretpostavki, tako da hajde da proverimo model na njemu:
+
+```{r}
+predictionsLrUk <- predict(lmFinal, newdata = ukDataClean)
+
+actual_values <- ukDataClean$CO2Emission
+
+rmse_value <- rmse(predictionsLrUk, actual_values)
+mae_value <- mae(predictionsLrUk, actual_values)
+
+cat("RMSE:", rmse_value, "\n")
+cat("MAE:", mae_value, "\n")
+```
+Ovome se nismo nadali, RMSE i MAE su gori svakako i to 10 puta, ali smo očekivali mnogo značajnije razlike, svakako moguće da smo uticali dosta na ovakav rezultat imajući u vidu da smo iz dataseta izbacili sve vrednosti koje ne konformišu prediktorima našeg modela, ali ovo je svakako iznenađujuće dobar rezultat.
+
+Da li smo napravili robustan model ili smo previše obradili dataset na kojem ga proveravamo ostavljamo čitaocu da odluči
+
+```{r}
+plot(actual_values, predictionsLrUk, main = "Actual vs Predicted",
+     xlab = "Actual CO2 Emission", ylab = "Predicted CO2 Emission")
+
+abline(a = 0, b = 1, col = "red")
+
+```
+
+Vidimo zašto se RMSE razlikuje od MSE za 3 jedinice mere, imamo pretpostavku od 1200 grama CO2 na 100km za neki red. Ono glavno na ovom plotu je to da solidno pratimo liniju pravih vrednosti ali kako se prave vrednosti povećavaju tako počinjemo da više promašujemo što i nije baš sjajno, a to može biti dokaz toga da nam model i nije baš idealan.
+
+Svakako nako svega model treba interpretirati
+
+## Interpretacija modela CO2Emission = FCComb + FuelType + (FCComb * FuelType)
+
+```{r}
+summary(lmFinal)
+```
+Prva stvar koju moramo da naznačimo je to da dodavanje interakcije dva prediktora blago komplikuje interpretaciju modela.
+
+Ono što primećujemo je da nam fali koeficijent za običan benzin, i u termu interakcije i sama kolona, ona je uzeta kao baseline vrednost, tj. ostali koeficijenti će se posmatrati u odnosu na vozilo koje koristi benzin.
+
+Na osnovu p vrednosti za Intercept možemo da zaključimo da on nije statistički značajan jer je njegova vrednost blizu nule.
+
+Nakon toga, imamo koeficijent za FCComb, tj. za prediktor koji opisuje kombinovanu potrošnju goriva, i on nam govori da ćemo sa porastom od jedne jedinice u potrošnji imati porast od 23.3 jedinice emisije CO2.
+
+FuelTypePremiumGasoline - Koeficijent vezan za kategoriju premijum benzina, on takođe nije statistički značajan na osnovu p vrednosti, tj. za taj tip goriva ćemo imati samo malu razliku u odnosu na običan benzin, što smo već i primetili pri analizi podataka.
+
+FuelTypeEthanol - Ovaj koeficijent nije statistički značajan, vrednost mu se ne razlikuje mnogo od nule, ali ipak se više razlikuje nego koeficijenti za dizel i za premium benzin, tj. on nam kaže da ćemo imati za prosečno 1.5 jedinica manje zagađenje kod vozila koja koriste etanol.
+
+FuelTypeDiesel - Ovaj takođe nije statistički značajan, ali ipak govori o tome da vozila koja voze dizel zagađuju malo više, što važi kada tu informaciju stavimo u kontekst analize podataka jer smo to već videli tamo.
+
+FCComb:FuelTypePremiumGasoline - Ovaj koeficijent nije statistički značajan ali opet imamo i blagu promenu značenja, kada nismo imali razmatranje veze između tipa goriva i potrošnje koeficijent je imao pozitivan predznak, a sada on ima negativan.
+
+FCComb:FuelTypeEthanol - Ovaj koeficijent ima jaku statističku važnost i govori o tome da ćemo imati za 6.8 manju vrednost zagađenja u proseku za vozila koja koriste etanol u odnosu na ona koja koriste običan benzin, efekat je očigledno mnogo jači sada kada posmatramo interakciju između tipa goriva i potrošnje, tj. možemo reći da porast potrošnje goriva kod vozila koja koriste etanol rezultira u manjem rastu emisija co2 u odnosu na rast koji imamo kod vozila koja koriste običan benzin.
+
+
+FCComb:FuelTypeDiesel - Ovaj koeficijent je takođe statistički važan i radi suprotno od onog prethodnog, tj. govori nam o tome da porast potrošnje kod vozila koja koriste dizel utiče više na porast zagađenja nego kod vozila koja koriste običan benzin. što je i očekivano.
+
+Statistike modela smo već komentarisali, sada možemo isprobati par drugačijih pristupa.
+
+### Lasso & Ridge
+
+Biblioteke:
+
+```{r}
+library(glmnet)
+```
+
+Podela na x koji će sadržati skup prediktora i y koji će sadržati emisije CO2 koje predvidjamo i enkodiranje faktorskih prediktora, za prediktore sa dosta kategorija ćemo koristiti frequency encoding ( ne želimo da izazovemo target leakage nekom metodom target encodinga, tj. da ne dođe do toga da nam informacije o vrednosti koju prediktujemo procure u skup podataka na osnovu kog treniramo model)
+
+Model kolonu odbacujemo jer ima previše kategorija.
+
+```{r}
+
+model_column_index <- which(names(train) == "Model")
+
+train <- train[, -model_column_index]
+
+test <- test[, -model_column_index]
+```
+
+
+```{r}
+
+
+for (col in names(train)) {
+  if (is.character(train[[col]]) || is.factor(train[[col]])) {
+    
+    category_counts <- table(train[[col]])
+    
+    train[[col]] <- category_counts[train[[col]]]
+  }
+}
+
+train <- train[, -which(names(train) == "FuelType")]
+train[1,]
+```
+```{r}
+for (col in names(test)) {
+  if (is.character(test[[col]]) || is.factor(test[[col]])) {
+
+    category_counts <- table(test[[col]])
+    
+    test[[col]] <- category_counts[test[[col]]]
+  }
+}
+
+test <- test[, -which(names(test) == "FuelType")]
+test[1,]
+```
+Nakon što smo obradili test i train dataset, delimo ih na prediktorski set i zavisni set podataka.
+
+```{r}
+
+x_train <- train[, !(names(train) %in% c("CO2Emission"))]
+y_train <- train$CO2Emission
+
+x_test <- test[, !(names(test) %in% c("CO2Emission"))]
+y_test <- test$CO2Emission
+```
+
+### Lasso
+```{r}
+lasso_model <- glmnet(x_train, y_train, alpha = 1)  # alpha = 1 for Lasso
+
+plot(lasso_model, xvar = "lambda", label = TRUE)
+```
+
+Ono što možemo primetiti na ovom plotu jeste kako nam se lambda povećava tako se stepen regularizacije povećava tj smanjuju se koeficijenti svakog od prediktora, mi ovde tražimo najbolje lambda tj. ono lambda gde nam je vrednost greške minimalna i biramo njega za optimalan model.
+
+```{r}
+cv_lasso <- cv.glmnet(data.matrix(x_train), y_train, alpha = 1)
+
+plot(cv_lasso)
+
+optimal_lambda <- cv_lasso$lambda.min
+cat("Optimal Lambda:", optimal_lambda, "\n")
+
+lasso_model_optimal <- glmnet(x_train, y_train, alpha = 1, lambda = optimal_lambda)
+
+
+```
+Pronalazimo da nam je najmanji MSE kada je lambda 0,16 i koristimo tu vrednost kao finalnu.
+
+```{r}
+coef(lasso_model_optimal)
+```
+Sada možemo analizirati koeficijente:
+  
+Intercept nam je 25 jedinica mere
+
+Make i Vehicle class su smatrani nevažnim i regulisani su na nulu.
+
+Engine Size i cylinders imaju blag uticaj na emisije CO2
+
+Kolona koja opisuju potrošnju u gradu pri promeni za jednu jedinicu mere povećava emisije CO2 za 11 jedinica u proseku, kolona za potrošnju van grada povećava emisije za 9 jedinica u proseku.
+
+Ostale dve kolone potrošnje nemaju veliki uticaj.
+
+Tipovi goriva kao što su benzin i premium benzin su regulisani na nulu.
+
+Ako vozilo koristi etanol, u proseku to smanjuje izlaz CO2 za 102 jedinicu
+
+A ako vozilo koristi dizel, to povećava emisije CO2 za 30 jedinica u proseku.
+
+
+```{r}
+
+lasso_predictions <- predict(lasso_model_optimal, newx = data.matrix(x_test))
+
+rmse <- rmse(lasso_predictions, y_test)
+cat("RMSE:", rmse, "\n")
+
+mae_value <- mae(lasso_predictions, y_test)
+cat("MAE:", mae_value, "\n")
+
+sst <- sum((y_test - mean(y_test))^2)
+sse <- sum((lasso_predictions - y_test)^2)
+
+rsq <- 1 - sse/sst
+cat("R2:",rsq)
+
+```
+
+Vidimo da model ima solidnu preciznost sa greškom 3.7 jedinica za RMSE i 2.5 za MAE,
+što znači da pravi malo više većih grešaka.
+
+Model opisuje 99 posto varijabilnosti u podacima, do duše nismo sigurni da li je ovo validna metrika za testni skup.
+
+```{r}
+plot(y_test, lasso_predictions, main = "Actual vs Predicted",
+     xlab = "Actual CO2 Emission", ylab = "Predicted CO2 Emission")
+
+abline(a = 0, b = 1, col = "red")
+```
+
+Na actual vs predicted plotu vidimo dobra svojstva, model prati dijagonalu na plotu poprilično precizno ali ipak prikazuje mali broj odstupanja.
+
+### Ridge
+
+Razlika izmedju Ridge i Lasso je u tome što Ridge ne može da regularizuje koeficijente na 0 već samo blizu nule, sada možemo da proverimo kako će se to odraziti na model.
+
+Koraci su identični kao kod LASSO sem što u glmnet funkciji stavljamo alpha na nula.
+
+```{r}
+
+ridge_model <- glmnet(x_train, y_train, alpha = 0)
+
+plot(ridge_model, xvar = "lambda", label = TRUE)
+```
+
+```{r}
+
+cv_ridge <- cv.glmnet(data.matrix(x_train), y_train, alpha = 0)
+
+plot(cv_ridge)
+
+optimal_lambda <- cv_ridge$lambda.min
+cat("Optimal Lambda:", optimal_lambda, "\n")
+
+ridge_model_optimal <- glmnet(x_train, y_train, alpha = 0, lambda = optimal_lambda)
+coef(ridge_model_optimal)
+```
+Vidimo u ovom slučaju da koeficijenti ne mogu biti 0, već su oni koji imaju manju važnost za model samo blizu nule, a situacija za ostale koeficijente je slična kao kod LASSO modela.
+
+```{r}
+
+ridge_predictions <- predict(ridge_model_optimal, newx = data.matrix(x_test))
+
+rmse <- rmse(ridge_predictions, y_test)
+cat("RMSE:", rmse, "\n")
+
+mae_value <- mae(ridge_predictions, y_test)
+cat("MAE:", mae_value, "\n")
+
+sst <- sum((y_test - mean(y_test))^2)
+sse <- sum((ridge_predictions - y_test)^2)
+
+rsq <- 1 - sse/sst
+cat("R2:",rsq)
+
+```
+Vidimo da ovaj model radi lošije od LASSO modela, ali su greške i dalje prihvatljive pošto nam vrednosti za CO2 variraju između 100 i 400 jedinica.
+
+```{r}
+plot(y_test, ridge_predictions, main = "Actual vs Predicted",
+     xlab = "Actual CO2 Emission", ylab = "Predicted CO2 Emission")
+
+abline(a = 0, b = 1, col = "red")
+```
+
+Ovde primećujemo blagu nelinearnost u plotu, za male i velike vrednosti emisija on podbacuje, ali za veliku većinu pogađa poprilično dobro.
+
+Pošto smo zaključili da nam veza između prediktora i emisje CO2 nije baš idealno linearna, možemo da isprobamo par modela koji se ne oslanjaju na tu linearnu vezu.
+
+Pored toga, pošto imamo poprilično veliki dataset, možda možemo da dobijemo i bolje rezultate nego one u linearnim modelima pošto će se ove metode oslanjati na veličinu dataseta za treniranje više nego linearna regresija.
+
+## Decision tree model
+
+Stabla odlučivanja mogu da dobro opišu nelinearne veze tako da ćemo isprobati model baziran nad njima.
+
+Pored toga, kategorijske varijable se obradjuju automatski tako da možemo da probamo prvo da koristimo naše train podatke koji su enkodirani, a nakon toga se vratiti na one koji nisu enkodirani i uporediti rezultate.
+
+```{r}
+library(tree)
+
+treeEnc = tree(CO2Emission ~ ., data = train)
+
+plot(treeEnc)
+text(treeEnc)
+
+```
+
+Na plotu možemo videti kako se stablo odlučivanja formira, proverava se kombinovana potrošnja, ako je manja od 10.65 ide se u levo podstablo, pa se proverava ponovo i tom logikom se ide dok se ne dodje do listova u kojima se nalaze vrednosti emisije CO2.
+
+Stablo samo bira na osnovu kog prediktora će deliti podatke.
+
+```{r}
+summary(treeEnc)
+```
+
+Vidimo da je stablo odabralo 3 prediktora na osnovu koga će kreirati model, a to su kombinovana potrošnja, potrošnja u gradu i binardno enkodirana kategorija koja sadrži da li vozilo koristi etanol ili ne.
+
+Metrika koja nam može nešto reći o kvalitetu ovog modela je Residual mean deviance koja označava koliko u proseku model greši za svaku tačku u datasetu, a sa vrednošću od 169.2 imamo solidan rezultat, a da bi ga malo bolje poredili sa prethodnim modelima možemo da proračunamo i MSE.
+
+```{r}
+trainPreds = predict(treeEnc, data = train)
+
+mse <- mean((trainPreds - train$CO2Emission)^2)
+cat("MSE:", mse, "\n")
+
+```
+
+Možemo da primetimo da je MSE jako sličan Residual standand deviance, što i nije i čudno pošto pojedini izvori tvrde da je on pandan ovoj metrici u slučaju da stablo vrši regresiju.
+
+(https://cdn2.hubspot.net/hubfs/402067/PDFs/Classification_and_Regression_Trees.pdf)
+
+"Residual mean deviance: a measure of the error remaining in the tree after construction.
+For a regression tree, this is related to the mean squared error"
+
+Sada ćemo izvršiti predikcije nad testnim skupom.
+
+```{r}
+predictions <- predict(treeEnc, newdata = test)
+
+rmse <- rmse(predictions, y_test)
+cat("RMSE:", rmse, "\n")
+
+mae_value <- mae(predictions, y_test)
+cat("MAE:", mae_value, "\n")
+```
+
+Rezultati i nisu toliko loši, grešimo za 9.5 jedinica za MAE, a 13 sa za RMSE što znači da imamo malo više većih grešaka.
+
+```{r}
+plot(test$CO2Emission, predictions, main = "Actual vs Predicted",
+     xlab = "Actual CO2 Emission", ylab = "Predicted CO2 Emission")
+
+abline(a = 0, b = 1, col = "red")
+```
+
+Vidimo popriličan problem ovde, a to da ovakvo stablo nije dovoljno kompleksno kako bi modeliralo sve detalje u podacima, tj. očigledno je da su predikcije podeljene u kategorije na osnovu toga kako su vrednosti završavale u određenom listu stabla, pošto smo videli da nam je broj tih krajnjih listova 9, možemo da probamo da povećamo dubinu stabla i da ga načinimo kompleksnijim.
+
+mindev argument označava koliko treba poboljšanje da bude u deviance metrici da bi se čvor podelio pri razvoju stabla, maje vrednosti ovog argumenta rezultiraju u kompleksnijim stablima zaključivanja
+
+
+```{r}
+treeEnc <- tree(CO2Emission ~ ., data = train, control = tree.control(nobs = nrow(train), mindev = 0.0001))
+
+summary(treeEnc)
+```
+Vidimo da sada imamo 52 krajnja čvora naspram 9 pre i da koristimo više prediktora, što rezultira u tume da imamo manji Residual Mean Deviance.
+
+```{r}
+trainPreds = predict(treeEnc, data = train)
+
+mse <- mean((trainPreds - train$CO2Emission)^2)
+cat("MSE:", mse, "\n")
+```
+
+Vidimo da ovo promena daje manji MSE za trening set. A sada ono što može biti problem je da je stablo overfittovano na train dataset, tako da ćemo izvršiti proveru nad test datasetom.
+
+
+```{r}
+predictions <- predict(treeEnc, newdata = test)
+
+rmse <- rmse(predictions, y_test)
+cat("RMSE:", rmse, "\n")
+
+mae_value <- mae(predictions, y_test)
+cat("MAE:", mae_value, "\n")
+```
+
+Vidimo otprilike trostruko poboljšanje u ovim metrikama nad test datasetom što znači da je ovo zaista bolji model.
+
+```{r}
+plot(test$CO2Emission, predictions, main = "Actual vs Predicted",
+     xlab = "Actual CO2 Emission", ylab = "Predicted CO2 Emission")
+
+abline(a = 0, b = 1, col = "red")
+```
+
+I dalje možemo da primetimo male potkategorije vrednosti koje model pretpostavlja, ali ovo je mnogo bolja podela nego pre.
+
+Dalje bi ovaj model mogli da još više poboljšamo kada bi mu povećali kompleksnost, ali tek u određenoj meri kako ne bi došlo do overfittinga, a to bi mogli da rešimo time što bi izveli "pruning" stabla, tj. metodu regularizacije za ovakve modele gde se odsecaju pojedine grane stabla kako bi smanjili šanse za overfitting.
+
+## Random forest model
+
+Ovaj model se gradi nad konceptom stabla odlučivanja tako što se kreira nad više stabla odlučivanja kako bi kombinovanjem rezultata tih stabala dolazio do zaključaka (ensemble). 
+
+Pored toga ovakav model koristi "bagging" (Bootstrap Aggregating) tj. metodu ansambla modela gde se za svaki manji model vrši bootstraping podskupa podataka, a nako što se ti manji modeli istreniraju, najbolji rezultat se bira vađenjem proseka rezultata izmedju različitih modela u slučaju regresije.
+
+```{r}
+library(randomForest)
+
+rfEnc = randomForest(CO2Emission ~ ., data = train)
+
+rfEnc
+
+```
+
+Vidimo da je ovo regresija kao što smo očekivali, broj stabla je 500 što je default ali ćemo videti da li je potreban toliki broj.
+
+Mean of squared residuals tj. MSE nam je 7.9 što je poprilično dobra vrednost i procenat varijanse koji smo objasnili je 99.74.
+
+Pored toga, MSE se računa na out of bag podacima tako da bi trebao da bude sličan onom kojem ćemo dobiti nad testnim podacima ali to ćemo svakako testirati.
+
+```{r}
+plot(rfEnc)
+```
+
+Na osnovu ovog plota možemo da primetimo da nam je 500 stabla mnogo pošto je greška već spala na minimum već negde oko dvestotog stabla
+
+Pored toga, možemo da povećamo broj promenljivih koje stablo isprobava pri svakoj podeli korišćenjem mtry argumenta.
+
+```{r}
+rfEnc = randomForest(CO2Emission ~ ., data = train, ntree = 200, mtry = 12)
+
+rfEnc
+```
+```{r}
+plot(rfEnc)
+```
+
+Možemo da primetimo da smo dosta smanjli MSE i da smo povećali R2. Sada model možemo da proverimo model nad test podacima.
+
+```{r}
+predictions <- predict(rfEnc, newdata = test)
+
+mse <- mse(predictions, y_test)
+cat("MSE:", mse, "\n")
+
+rmse <- rmse(predictions, y_test)
+cat("RMSE:", rmse, "\n")
+
+mae_value <- mae(predictions, y_test)
+cat("MAE:", mae_value, "\n")
+```
+MSE za test skup je malo gori od onog koji je izračunat nad out of bag podacima kada je model treniran, ali svakako ne mnogo.
+
+Imamo odlične rezultate za RMSE i za MAE, veoma su slični onim iz modela linearne regresije koji je podešavan ručno.
+
+```{r}
+plot(test$CO2Emission, predictions, main = "Actual vs Predicted",
+     xlab = "Actual CO2 Emission", ylab = "Predicted CO2 Emission")
+
+
+abline(a = 0, b = 1, col = "red")
+```
+
+Očigledan je dobar fit ovog modela, tačke skoro idealno prate dijagonalu, imamo samo par malih odstupanja.
+
+Za kraj možemo isprobati neke gradient boosting metode.
+
+## Gradient boost - xgboost
+
+Ovi modeli koriste više slabih modela mašinskog učenja kako bi napravili jedan jak model. Na početku se kreira i fituje jedan inicijalni model npr. stablo odlučivanja, a nakon toga drugi model koji se fokusira na to da pogodi kako treba za slučajeve u kojima je prvi promašio. 
+
+Ovo je takođe metoda ansambla kao i bagging, ali se razlikuje u tome što svaki sledeći model se trudi da ispravi greške svog prethodnika, tj. on boostuje rezultat.
+
+Nakon toga, ovaj proces se ponavlja puno puta dok se ne dodje do uslova za zaustavljanje. 
+
+Mi ćemo isprobati par gradient boost modela, prvi je xgboost.
+
+```{r}
+library(xgboost)
+```
+
+Možemo da isprobamo dva pristupa, da pošaljemo sve feature pa da sam algoritam izvrši nekakvu vrstu feature selection-a tako što će konstruisati stabla odlučivanja u kojima se prediktorima sa boljim rezultatima daje veća važnost ili da pošaljemo samo FCComb i FuelType kao što smo imali kod linearnog modela.
+
+Kod druge opcije možemo proveriti kako se ovaj jači model ponaša sa neviđenim podacima (ukData).
+
+```{r}
+x_train_alt = train[c("FCComb", "FuelTypeGasoline", "FuelTypePremiumGasoline", "FuelTypeEthanol", "FuelTypeDiesel")]
+y_train_alt = train$CO2Emission
+
+x_test_alt = test[c("FCComb", "FuelTypeGasoline", "FuelTypePremiumGasoline", "FuelTypeEthanol", "FuelTypeDiesel")]
+y_test_alt = test$CO2Emission
+```
+
+Pre nego što krenemo treba da postavimo početne parametre, menjaćemo ih u zavisnosti od rezultata, ali se svakako za ozbiljnije primene može uraditi hyperparameter tuning.
+
+```{r}
+params <- list(
+  objective = "reg:squarederror", 
+  max_depth = 8,
+  eta = 0.2
+)
+```
+
+objective - specifikacija loss funkcije, u ovom slučaju RMSE pošto radimo regresiju
+
+max_depth - maksimalna dubina svakog od stabala koje se koriste pri treniranju modela
+
+eta - learning rate tj. stopa učenja modela, koristimo je kako bi sprečili overfitting
+
+To su samo neki od hiperparametara koje je moguće postaviti.
+
+
+```{r}
+
+# Train the XGBoost model
+xgbAll <- xgboost(data = as.matrix(x_train), label = y_train, params = params, nrounds = 300, verbose = FALSE)
+
+xgbAll
+
+```
+Možemo primetiti da je model doterao train rmse do 1.6 nakon 300 etapa treniranja što bi trebalo da bude odlično ali ćemo videti kako se ponaša na test skupu.
+
+```{r}
+xgbAlt <- xgboost(data = as.matrix(x_train_alt), label = y_train_alt, params = params, nrounds = 300, verbose = FALSE)
+
+xgbAlt
+```
+
+Vidimo gori rezultat u slučaju gde koristimo samo FCComb i enkodiran FuelType, sada ćemo probati ova dva modela na originalnom testnom skupu.
+
+**xgboost sa svim prediktorima**
+
+```{r}
+predictions <- predict(xgbAll, as.matrix(x_test))
+
+rmse <- rmse(predictions, y_test)
+cat("RMSE:", rmse, "\n")
+
+mae_value <- mae(predictions, y_test)
+cat("MAE:", mae_value, "\n")
+```
+
+```{r}
+plot(test$CO2Emission, predictions, main = "Actual vs Predicted",
+     xlab = "Actual CO2 Emission", ylab = "Predicted CO2 Emission")
+
+abline(a = 0, b = 1, col = "red")
+```
+
+Primećujemo da ovaj model odlično pretpostavlja i na testnom skupu, sada da probamo drugi koji je ograničen prediktorima.
+
+**xgboost sa FCComb i enkodiranim FuelType za prediktore**
+
+```{r}
+predictions <- predict(xgbAlt, as.matrix(x_test_alt))
+
+rmse <- rmse(predictions, y_test_alt)
+cat("RMSE:", rmse, "\n")
+
+mae_value <- mae(predictions, y_test_alt)
+cat("MAE:", mae_value, "\n")
+```
+
+```{r}
+plot(test$CO2Emission, predictions, main = "Actual vs Predicted",
+     xlab = "Actual CO2 Emission", ylab = "Predicted CO2 Emission")
+
+abline(a = 0, b = 1, col = "red")
+```
+
+Ovde imamo jako čudan rezultat, a to je da su metrike iz nekog razloga bolje na ovom modelu, izgleda da onaj prvi model koji drži sve prediktore ima blag overfitting.
+
+**Poređenje sa modelom linearne regresije nad ukData skupom podataka**
+
+```{r}
+x_testUK = ukDataClean[c("FCComb", "FuelTypeGasoline", "FuelTypePremiumGasoline", "FuelTypeEthanol", "FuelTypeDiesel")]
+y_testUK = ukDataClean$CO2Emission
+```
+
+
+```{r}
+predictionsXGB <- predict(xgbAlt, as.matrix(x_testUK))
+
+rmse <- rmse(predictionsXGB, y_testUK)
+cat("RMSE:", rmse, "\n")
+
+mae_value <- mae(predictionsXGB, y_testUK)
+cat("MAE:", mae_value, "\n")
+```
+
+```{r}
+
+par(mfrow = c(1, 2))
+
+
+plot(y_testUK, predictionsXGB, main = "Actual vs Predicted (xgboost)",
+     xlab = "Actual CO2 Emission", ylab = "Predicted CO2 Emission")
+abline(a = 0, b = 1, col = "red")
+
+plot(y_testUK, predictionsLrUk, main = "Actual vs Predicted (Linear Model)",
+     xlab = "Actual CO2 Emission", ylab = "Predicted CO2 Emission")
+abline(a = 0, b = 1, col = "red")
+
+par(mfrow = c(1, 1))
+
+
+```
+
+Prema metrikama za RMSE i MAE pomislili bi da imamo bolji model ali je očigledno da imamo ozbiljan problem ako pogledamo u plot pravih i pretpostavljenih vrednosti, a to je da model ne pretpostavlja vrednosti veće u 400, jer je to bio maksimum u trening datasetu, a u ovom imamo i veće realne vrednosti, a takođe ovaj model počinje da promašuje kako se vrednosti CO2 povećavaju, isto kao i model linearne regresije.
+
+Svakako, sve ovo smatramo našom greškom, koristimo neke pretpostavljene vrednosti hiperparametara što sigurno nije dobro.
+
+Ovakve modele je teže interpretirati ali svakako ima načina, jedan od njih je da proverimo važnost svakog prediktora
+tj. feature importance
+
+```{r}
+xgb.importance(model = xgbAlt)
+```
+Ono što je važno za odredjivanje važnosti prediktivne moći prediktora je Gain kolona.
+
+Vidimo da u modelu koji ima ograničene prediktore najveći gain ima FCComb kolona, što znači da ovaj prediktor najviše doprinosi našem modelu.
+
+Sada možemo da proverimo to isto za model koji ima sve prediktore.
+
+```{r}
+xgb.importance(model = xgbAll)
+```
+Ista situacija je i ovde, FCComb i dalje najviše doprinosi i kod ovog modela.
+
+## LightGBM model
+
+Ova implementacija gradient boost algoritma pruža dobre brzine treniranja i dobru memorijsku efikasnost, što je čini pogodnom za velike skupove podataka.
+
+U poređenju sa xgboost implementacijom, LightGBM pruža bolju memorijsku efikasnost, omogućava automatsko enkodiranje kategorijskih prediktora, i još neke prednosti.
+
+```{r}
+library(lightgbm)
+```
+
+Hiperparametri:
+
+```{r}
+params <- list(
+  objective = "regression",
+  metric = "rmse",
+  learning_rate = 0.3,
+  max_depth = 8,
+  num_leaves = 50,
+  verbosity = -1
+)
+```
+
+Podaci za treniranje:
+
+```{r}
+train <- lgb.Dataset(data = as.matrix(x_train_alt), label = y_train_alt)
+test <- lgb.Dataset(data = as.matrix(x_test_alt), label = y_test_alt, reference = train)
+```
+
+
+Treniranje modela:
+
+```{r}
+lgb_model <- lgb.train(params, train, nrounds = 300, valids = list(test = test) , verbose = 0, early_stopping_rounds = 5)
+```
+
+```{r}
+lgb_model$best_score
+```
+
+
+Koristimo early stopping kako bi zaustavili treniranje ako nema poboljšanja u metrici nakon 5 iteracija.
+
+Najbolja vrednost koju je model postigao je 2.93 za RMSE, što i nije baš sjajno u poređenju sa prethodnim modelima
+
+Sada da vidimo kako se ponaša sa ukData skupom podataka.
+
+```{r}
+
+predictions <- predict(lgb_model, as.matrix(x_testUK))
+
+rmse <- rmse(predictions, y_testUK)
+cat("RMSE:", rmse, "\n")
+
+mae_value <- mae(predictions, y_testUK)
+cat("MAE:", mae_value, "\n")
+```
+Svakako deluje da imamo solidne rezultate u obe metrike, sada da proverimo plot.
+
+```{r}
+par(mfrow = c(1, 3))
+
+
+plot(y_testUK, predictions, main = "Actual vs Predicted (LightGBM)",
+     xlab = "Actual CO2 Emission", ylab = "Predicted CO2 Emission")
+abline(a = 0, b = 1, col = "red")
+
+plot(y_testUK, predictionsXGB, main = "Actual vs Predicted (XGBoost)",
+     xlab = "Actual CO2 Emission", ylab = "Predicted CO2 Emission")
+abline(a = 0, b = 1, col = "red")
+
+plot(y_testUK, predictionsLrUk, main = "Actual vs Predicted (Linear Model)",
+     xlab = "Actual CO2 Emission", ylab = "Predicted CO2 Emission")
+abline(a = 0, b = 1, col = "red")
+
+par(mfrow = c(1, 1))
+```
+
+Evidentno je da imamo identičan problem kao i kod XGBoost implementacije, možda bi ga mogli rešiti skaliranjem vrednosti emisija CO2, ali svakako van toga i ovaj model pravi dobre predikcije.
+
